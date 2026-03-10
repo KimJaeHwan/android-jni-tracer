@@ -1,0 +1,57 @@
+# Build outputs
+build/
+*.o
+*.d
+*.so
+*.a
+
+# Executable binaries
+jni_harness_*
+!build-android.ps1
+
+# Log files
+logs/
+*.log
+*.json
+
+# Target SO files (test files)
+target/*.so
+target/*.a
+
+# Build error logs
+error_*.txt
+
+# OS specific
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE / Editor
+.vscode/
+.idea/
+*.sublime-*
+*.code-workspace
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Compressed files
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+
+# Android specific
+*.apk
+*.dex
+classes.dex
+*.class
+
+# WSL / Linux
+.*.swp
+core
+vgcore.*
