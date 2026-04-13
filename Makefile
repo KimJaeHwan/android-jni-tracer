@@ -55,12 +55,14 @@ INCLUDE_DIR = include
 SOURCES = $(SRC_DIR)/main.c \
           $(SRC_DIR)/fake_jni.c \
           $(SRC_DIR)/jni_logger.c \
-          $(SRC_DIR)/json_logger.c
+          $(SRC_DIR)/json_logger.c \
+          $(SRC_DIR)/mock_config.c
 
 OBJECTS = $(BUILD_DIR)/main.o \
           $(BUILD_DIR)/fake_jni.o \
           $(BUILD_DIR)/jni_logger.o \
-          $(BUILD_DIR)/json_logger.o
+          $(BUILD_DIR)/json_logger.o \
+          $(BUILD_DIR)/mock_config.o
 
 # Executable
 TARGET = $(BUILD_DIR)/jni_harness_$(ARCH_SUFFIX)
@@ -99,6 +101,7 @@ show-info:
 	@echo ""
 	@echo "  3. Run the harness:"
 	@echo "     $(COLOR_CYAN)./$(TARGET) target/your_library.so$(COLOR_RESET)"
+	@echo "     $(COLOR_CYAN)./$(TARGET) --mock mock.json target/your_library.so$(COLOR_RESET)"
 	@echo ""
 	@echo "  4. View logs:"
 	@echo "     $(COLOR_CYAN)cat logs/jni_hook.log$(COLOR_RESET)"
@@ -132,6 +135,10 @@ $(BUILD_DIR)/jni_logger.o: $(SRC_DIR)/jni_logger.c $(SRC_DIR)/jni_logger.h
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/json_logger.o: $(SRC_DIR)/json_logger.c $(SRC_DIR)/json_logger.h
+	@echo "$(COLOR_BLUE)[CC]$(COLOR_RESET) $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/mock_config.o: $(SRC_DIR)/mock_config.c $(SRC_DIR)/mock_config.h $(INCLUDE_DIR)/jni.h
 	@echo "$(COLOR_BLUE)[CC]$(COLOR_RESET) $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
@@ -258,6 +265,10 @@ help:
 	@echo "  make run SO=target/libnative.so"
 	@echo "  make check-arch"
 	@echo "  make cross-arm64"
+	@echo ""
+	@echo "$(COLOR_CYAN)Mock config:$(COLOR_RESET)"
+	@echo "  $(COLOR_GREEN)./$(TARGET) --mock mock.json target/libnative.so$(COLOR_RESET)"
+	@echo "  Use --mock/-m to inject return values for specific JNI method calls"
 	@echo ""
 
 # Dependency tracking

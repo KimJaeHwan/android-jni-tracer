@@ -112,7 +112,8 @@ $Sources = @(
     "src\main.c",
     "src\fake_jni.c",
     "src\jni_logger.c",
-    "src\json_logger.c"
+    "src\json_logger.c",
+    "src\mock_config.c"
 )
 
 # Compiler flags
