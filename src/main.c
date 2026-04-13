@@ -213,10 +213,11 @@ int main(int argc, char* argv[]) {
     log_info("Check output files:");
     log_info("  - logs/jni_hook.log  (detailed text log)");
     log_info("  - logs/jni_hook.json (structured JSON log)");
-    
+
+    destroy_fake_jnienv(NULL); /* Release string pool and other resources */
     close_json_logger();
     close_logger();
-    
+
     /* Close SO handle */
     dlclose(handle);
 
