@@ -56,8 +56,12 @@ adb push target\*.so /data/local/tmp/
 # 실행 준비
 adb shell "cd /data/local/tmp && mkdir -p logs && chmod +x jni_harness_arm64_android"
 
-# 실행
+# 기본 실행
 adb shell "cd /data/local/tmp && LD_LIBRARY_PATH=. ./jni_harness_arm64_android ./libengine.so"
+
+# Mock 설정 주입 (리턴값 조작)
+adb push mock.json /data/local/tmp/
+adb shell "cd /data/local/tmp && LD_LIBRARY_PATH=. ./jni_harness_arm64_android --mock mock.json ./libengine.so"
 ```
 
 ### 3단계: 로그 다운로드 및 분석
@@ -100,31 +104,39 @@ cat logs\jni_hook.json | jq .
 
 - **[PROJECT_SPECIFICATION.md](./PROJECT_SPECIFICATION.md)** - 완전한 개발 명세서 (AI 개발자용)
 - **[JSON_ANALYSIS_GUIDE.md](./JSON_ANALYSIS_GUIDE.md)** - JSON 로그 분석 방법
+- **[docs/mock_config.md](./docs/mock_config.md)** - Mock 설정 파일 사용법 (리턴값 주입)
 
 ## ✨ 주요 기능
 
 - **JNI 함수 후킹**: FindClass, GetMethodID 등 모든 JNI 함수 호출 캡처
-- **상세 인자 모니터링**: 함수 호출 시 모든 인자값 완벽 캡처
+- **실제 호출 모니터링**: `GetMethodID`로 조회된 메서드가 **실제로 호출됐는지** 추적 — `CallBooleanMethod(0x20010)` 대신 `CallBooleanMethod(com/security/RootChecker.isRooted()Z)` 형태로 기록
+- **String Pool**: `NewStringUTF` / `GetStringUTFChars` 등 문자열 생명주기 완전 추적 — 실제 문자열 내용을 저장하고 반환
+- **Mock 설정 파일** (`--mock`): JSON 설정으로 특정 Java 메서드의 리턴값을 런타임에 주입 → 루팅 탐지 우회, 분기 강제 진입 등에 활용 ([상세 문서](./docs/mock_config.md))
 - **이중 로깅 시스템**:
   - 텍스트 로그: 실시간 모니터링용 가독성 높은 포맷
-  - JSON 로그: 분석 도구 연동을 위한 구조화된 데이터
+  - JSON 로그: 분석 도구 연동을 위한 구조화된 데이터 (caller offset 포함)
 - **통계 분석**: 함수별 호출 빈도 및 패턴 분석
 - **VM 불필요**: 실제 Android VM 없이 독립 실행
 
 ## 📂 프로젝트 구조
 
 ```
-AOS_haness_project/
-├── PROJECT_SPECIFICATION.md  ← AI 개발자용 완전한 명세서
+android-jni-tracer/
 ├── README.md                 ← 본 파일
+├── PROJECT_SPECIFICATION.md  ← AI 개발자용 완전한 명세서
+├── JSON_ANALYSIS_GUIDE.md    ← JSON 로그 분석 방법
+├── Makefile                  ← Linux/macOS 빌드
 ├── build-android.ps1         ← Windows용 Android NDK 빌드 스크립트
-├── .gitignore                ← Git 제외 파일 목록
-├── src/                      ← 소스 코드
-│   ├── main.c               ← 메인 하네스 로더
-│   ├── fake_jni.c           ← 230+ JNI 함수 stub 구현
+├── docs/
+│   └── mock_config.md        ← Mock 설정 파일 상세 문서
+├── src/
+│   ├── main.c               ← 메인 하네스 로더 (--mock 인수 지원)
+│   ├── fake_jni.c           ← 230+ JNI 함수 stub (MethodTable + StringPool 포함)
 │   ├── jni_logger.c         ← 텍스트 로깅 시스템
-│   └── json_logger.c        ← JSON 로깅 시스템
-├── include/                  ← 헤더 파일
+│   ├── json_logger.c        ← JSON 로깅 시스템
+│   ├── mock_config.c        ← Mock 설정 JSON 파서 및 조회 엔진
+│   └── mock_config.h        ← Mock API 선언
+├── include/
 │   └── jni.h                ← Android JNI 헤더
 ├── build/                    ← 빌드 결과물 (gitignore)
 ├── target/                   ← 분석 대상 SO 파일 (gitignore)
