@@ -17,6 +17,9 @@ JNIEnv* create_fake_jnienv(void);
 /* Cleanup (if needed) */
 void destroy_fake_jnienv(JNIEnv* env);
 
+/* Register the fake JavaVM so GetJavaVM() can return it correctly */
+void set_fake_javavm(JavaVM* vm);
+
 #ifdef __cplusplus
 }
 #endif
