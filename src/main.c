@@ -18,6 +18,7 @@
 #include "fake_jni.h"
 #include "jni_logger.h"
 #include "json_logger.h"
+#include "mock_config.h"
 
 /* JNI_OnLoad function pointer type */
 typedef jint (*JNI_OnLoad_t)(JavaVM* vm, void* reserved);
@@ -76,8 +77,22 @@ static struct JNIInvokeInterface fake_vm_funcs = {
 };
 
 int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s <target_so_path>\n", argv[0]);
+    const char* so_path   = NULL;
+    const char* mock_path = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if ((strcmp(argv[i], "--mock") == 0 || strcmp(argv[i], "-m") == 0) && i + 1 < argc) {
+            mock_path = argv[++i];
+        } else if (argv[i][0] != '-') {
+            so_path = argv[i];
+        }
+    }
+
+    if (!so_path) {
+        fprintf(stderr, "Usage: %s [--mock <config.json>] <target_so_path>\n", argv[0]);
+        fprintf(stderr, "\n");
+        fprintf(stderr, "Options:\n");
+        fprintf(stderr, "  --mock, -m <file>  Load mock return-value config (JSON)\n");
         fprintf(stderr, "\n");
         fprintf(stderr, "Description:\n");
         fprintf(stderr, "  JNI Function Hooking Harness for Android SO files\n");
@@ -85,7 +100,7 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "\n");
         fprintf(stderr, "Examples:\n");
         fprintf(stderr, "  %s target/libnative.so\n", argv[0]);
-        fprintf(stderr, "  %s /path/to/library.so\n", argv[0]);
+        fprintf(stderr, "  %s --mock mock.json target/libnative.so\n", argv[0]);
         fprintf(stderr, "\n");
         fprintf(stderr, "Output Files:\n");
         fprintf(stderr, "  logs/jni_hook.log  - Text format log\n");
@@ -93,13 +108,22 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "\n");
         return 1;
     }
-
-    const char* so_path = argv[1];
     
     /* Initialize loggers */
     init_logger("./logs/jni_hook.log");
     init_json_logger("./logs/jni_hook.json");
-    
+
+    /* Load mock config if provided */
+    if (mock_path) {
+        if (mock_load(mock_path) == 0) {
+            log_info("Mock config loaded: %s (%d entries)", mock_path, mock_count());
+        } else {
+            log_warning("Failed to load mock config: %s", mock_path);
+        }
+    } else {
+        log_info("No mock config (use --mock <file> to inject return values)");
+    }
+
     log_info("=== JNI Harness Started ===");
     log_info("Build Date: %s %s", __DATE__, __TIME__);
     
@@ -214,6 +238,7 @@ int main(int argc, char* argv[]) {
     log_info("  - logs/jni_hook.log  (detailed text log)");
     log_info("  - logs/jni_hook.json (structured JSON log)");
 
+    mock_destroy();
     destroy_fake_jnienv(NULL); /* Release string pool and other resources */
     close_json_logger();
     close_logger();
