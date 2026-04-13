@@ -71,22 +71,25 @@ void log_info(const char* format, ...) {
 
 void log_error(const char* format, ...) {
     if (!g_log_file) g_log_file = stderr;
-    
+
     va_list args;
+
+    /* Write to log file */
     va_start(args, format);
-    
     fprintf(g_log_file, "[ERROR] ");
     vfprintf(g_log_file, format, args);
     fprintf(g_log_file, "\n");
     fflush(g_log_file);
-    
-    /* Also output to stderr */
-    fprintf(stderr, "[ERROR] ");
-    va_start(args, format);
-    vfprintf(stderr, format, args);
-    fprintf(stderr, "\n");
-    
     va_end(args);
+
+    /* Also output to stderr (skip if log file IS stderr to avoid duplicate) */
+    if (g_log_file != stderr) {
+        va_start(args, format);
+        fprintf(stderr, "[ERROR] ");
+        vfprintf(stderr, format, args);
+        fprintf(stderr, "\n");
+        va_end(args);
+    }
 }
 
 void log_warning(const char* format, ...) {

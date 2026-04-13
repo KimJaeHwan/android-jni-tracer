@@ -28,6 +28,13 @@ static ClassEntry class_table[MAX_CLASSES];
 static int class_count = 0;
 static uintptr_t next_class_id = 0x10000;
 
+/* Fake JavaVM pointer registered from main.c */
+static JavaVM* g_fake_javavm = NULL;
+
+void set_fake_javavm(JavaVM* vm) {
+    g_fake_javavm = vm;
+}
+
 /* Register a new class and return unique jclass pointer */
 static jclass register_class(const char* name) {
     if (class_count >= MAX_CLASSES) {
@@ -221,6 +228,9 @@ static void JNICALL fake_ExceptionClear(JNIEnv* env) {
 static void JNICALL fake_FatalError(JNIEnv* env, const char* msg) {
     LOG_CALL_1("FatalError", "msg=%s", msg ? msg : "NULL");
     increment_call_count("FatalError");
+    /* JNI spec: FatalError must never return — flush logs then abort */
+    log_info("[FATAL] FatalError called: %s — aborting process", msg ? msg : "NULL");
+    abort();
 }
 
 /* ============================================
@@ -920,9 +930,10 @@ DEFINE_SET_ARRAY_REGION(Double, double)
 
 static jint JNICALL fake_RegisterNatives(JNIEnv* env, jclass clazz, const JNINativeMethod* methods, jint nMethods) {
     const char* class_name = get_class_name(clazz);
-    
+
     LOG_CALL_3("RegisterNatives", "clazz=%p [%s], nMethods=%d", clazz, class_name, nMethods);
-    
+
+    /* Log each method to text log */
     if (methods && nMethods > 0) {
         for (jint i = 0; i < nMethods; i++) {
             log_info("  [%d] name=%s, signature=%s, fnPtr=%p",
@@ -932,18 +943,44 @@ static jint JNICALL fake_RegisterNatives(JNIEnv* env, jclass clazz, const JNINat
                      methods[i].fnPtr);
         }
     }
-    
-    /* Build JSON log with methods detail */
-    const char* arg_names[] = {"env", "clazz", "class_name", "nMethods", "methods_count"};
-    char arg_values[5][256];
+
+    /* Build a JSON methods array string inline */
+    /* Each entry: {"name":"...","signature":"...","fnPtr":"0x..."} */
+    /* Budget: nMethods * ~512 bytes should be more than enough */
+    int methods_buf_size = (nMethods > 0 ? nMethods : 1) * 512 + 16;
+    char* methods_json = (char*)malloc(methods_buf_size);
+    if (methods_json) {
+        int pos = 0;
+        pos += snprintf(methods_json + pos, methods_buf_size - pos, "[");
+        if (methods && nMethods > 0) {
+            for (jint i = 0; i < nMethods; i++) {
+                char* esc_name = escape_json_string(methods[i].name ? methods[i].name : "NULL");
+                char* esc_sig  = escape_json_string(methods[i].signature ? methods[i].signature : "NULL");
+                pos += snprintf(methods_json + pos, methods_buf_size - pos,
+                                "%s{\"name\":%s,\"signature\":%s,\"fnPtr\":\"%p\"}",
+                                (i > 0 ? "," : ""),
+                                esc_name, esc_sig, methods[i].fnPtr);
+                free_escaped_string(esc_name);
+                free_escaped_string(esc_sig);
+            }
+        }
+        snprintf(methods_json + pos, methods_buf_size - pos, "]");
+    }
+
+    /* Log to JSON: standard fields first, then methods array as raw JSON */
+    const char* arg_names[] = {"env", "clazz", "class_name", "nMethods"};
+    char arg_values[4][256];
     snprintf(arg_values[0], 256, "%p", (void*)env);
     snprintf(arg_values[1], 256, "%p", (void*)clazz);
     snprintf(arg_values[2], 256, "%s", class_name);
     snprintf(arg_values[3], 256, "%d", nMethods);
-    snprintf(arg_values[4], 256, "%d", nMethods);
-    const char* arg_value_ptrs[] = {arg_values[0], arg_values[1], arg_values[2], arg_values[3], arg_values[4]};
-    log_jni_call_json("RegisterNatives", arg_names, arg_value_ptrs, 5);
-    
+    const char* arg_value_ptrs[] = {arg_values[0], arg_values[1], arg_values[2], arg_values[3]};
+    log_jni_call_json_raw_last("RegisterNatives",
+                               arg_names, arg_value_ptrs, 4,
+                               "methods", methods_json ? methods_json : "[]");
+
+    if (methods_json) free(methods_json);
+
     increment_call_count("RegisterNatives");
     return JNI_OK;
 }
@@ -973,7 +1010,9 @@ static jint JNICALL fake_MonitorExit(JNIEnv* env, jobject obj) {
 static jint JNICALL fake_GetJavaVM(JNIEnv* env, JavaVM** vm) {
     LOG_CALL_1("GetJavaVM", "vm=%p", vm);
     increment_call_count("GetJavaVM");
-    if (vm) *vm = NULL;
+    if (vm) {
+        *vm = g_fake_javavm;  /* Return registered fake JavaVM, not NULL */
+    }
     return JNI_OK;
 }
 
@@ -984,11 +1023,19 @@ static jint JNICALL fake_GetJavaVM(JNIEnv* env, JavaVM** vm) {
 static void JNICALL fake_GetStringRegion(JNIEnv* env, jstring str, jsize start, jsize len, jchar* buf) {
     LOG_CALL_3("GetStringRegion", "str=%p, start=%d, len=%d", str, start, len);
     increment_call_count("GetStringRegion");
+    /* Zero-fill output buffer so callers don't read uninitialized memory */
+    if (buf && len > 0) {
+        memset(buf, 0, (size_t)len * sizeof(jchar));
+    }
 }
 
 static void JNICALL fake_GetStringUTFRegion(JNIEnv* env, jstring str, jsize start, jsize len, char* buf) {
     LOG_CALL_3("GetStringUTFRegion", "str=%p, start=%d, len=%d", str, start, len);
     increment_call_count("GetStringUTFRegion");
+    /* Zero-fill output buffer so callers don't read uninitialized memory */
+    if (buf && len > 0) {
+        memset(buf, 0, (size_t)len * sizeof(char));
+    }
 }
 
 /* ============================================
