@@ -45,6 +45,10 @@ static int g_json_call_index = 0;
 static int g_first_entry = 1;
 static int g_maps_parsed = 0;  /* Lazy loading flag */
 
+/* Set JNI_TRACER_VERBOSE=1 in environment to enable debug prints */
+#define VERBOSE_ENABLED() (getenv("JNI_TRACER_VERBOSE") != NULL)
+#define DEBUG_PRINT(...) do { if (VERBOSE_ENABLED()) fprintf(stderr, __VA_ARGS__); } while(0)
+
 /* Parse /proc/self/maps to get loaded module base addresses */
 static void parse_proc_maps(void) {
     FILE* maps = fopen("/proc/self/maps", "r");
@@ -69,16 +73,16 @@ static void parse_proc_maps(void) {
             g_modules[g_module_count].end_addr = end;
             strncpy(g_modules[g_module_count].name, path, sizeof(g_modules[g_module_count].name) - 1);
             g_modules[g_module_count].name[sizeof(g_modules[g_module_count].name) - 1] = '\0';
-            
-            fprintf(stderr, "[DEBUG] Module[%d]: %lx-%lx %s %s\n", 
-                    g_module_count, start, end, perms, path);
-            
+
+            DEBUG_PRINT("[DEBUG] Module[%d]: %lx-%lx %s %s\n",
+                        g_module_count, start, end, perms, path);
+
             g_module_count++;
         }
     }
-    
+
     fclose(maps);
-    fprintf(stderr, "[INFO] Loaded %d executable memory segments from /proc/self/maps\n", g_module_count);
+    DEBUG_PRINT("[INFO] Loaded %d executable memory segments from /proc/self/maps\n", g_module_count);
     g_maps_parsed = 1;  /* Mark as parsed */
 }
 
@@ -106,14 +110,14 @@ static int find_module_offset(void* addr, unsigned long* offset, char* module_na
             strncpy(module_name, found_name, name_size - 1);
             module_name[name_size - 1] = '\0';
             
-            fprintf(stderr, "[DEBUG] Address %p found in %s, offset=0x%lx (base=0x%lx)\n",
-                    addr, module_name, *offset, lowest_base);
+            DEBUG_PRINT("[DEBUG] Address %p found in %s, offset=0x%lx (base=0x%lx)\n",
+                        addr, module_name, *offset, lowest_base);
             
             return 1; /* Found */
         }
     }
     
-    fprintf(stderr, "[DEBUG] Address %p NOT found in any loaded module\n", addr);
+    DEBUG_PRINT("[DEBUG] Address %p NOT found in any loaded module\n", addr);
     return 0; /* Not found */
 }
 
@@ -141,8 +145,12 @@ char* escape_json_string(const char* str) {
     }
     
     size_t len = strlen(str);
-    /* Allocate enough space for worst case (all characters need escaping) */
-    char* escaped = (char*)malloc(len * 2 + 3);
+    /* Allocate enough space for worst case:
+     * - Control chars below 0x20 expand to \uXXXX (6 bytes per char)
+     * - Other escapable chars (", \, etc.) expand to 2 bytes per char
+     * - 2 surrounding quotes + null terminator = +3
+     */
+    char* escaped = (char*)malloc(len * 6 + 3);
     if (!escaped) {
         return strdup("null");
     }
@@ -201,7 +209,8 @@ void free_escaped_string(char* str) {
     }
 }
 
-void log_jni_call_json(const char* func_name, const char** arg_names, 
+__attribute__((noinline))
+void log_jni_call_json(const char* func_name, const char** arg_names,
                        const char** arg_values, int arg_count) {
     if (!g_json_file) return;
     
@@ -263,6 +272,73 @@ void log_jni_call_json(const char* func_name, const char** arg_names,
         free_escaped_string(escaped_value);
     }
     
+    fprintf(g_json_file, "      }\n");
+    fprintf(g_json_file, "    }");
+    fflush(g_json_file);
+}
+
+__attribute__((noinline))
+void log_jni_call_json_raw_last(const char* func_name,
+                                const char** arg_names,
+                                const char** arg_values, int arg_count,
+                                const char* raw_field_name,
+                                const char* raw_field_value) {
+    if (!g_json_file) return;
+
+    if (!g_maps_parsed) {
+        parse_proc_maps();
+    }
+
+    void* caller_addr = __builtin_return_address(1);
+
+    unsigned long offset = 0;
+    char module_name[256] = "unknown";
+    int found = find_module_offset(caller_addr, &offset, module_name, sizeof(module_name));
+
+    char* basename = strrchr(module_name, '/');
+    if (basename) {
+        basename++;
+    } else {
+        basename = module_name;
+    }
+
+    if (!g_first_entry) {
+        fprintf(g_json_file, ",\n");
+    }
+    g_first_entry = 0;
+
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    fprintf(g_json_file, "    {\n");
+    fprintf(g_json_file, "      \"index\": %d,\n", g_json_call_index++);
+    fprintf(g_json_file, "      \"timestamp_sec\": %ld,\n", ts.tv_sec);
+    fprintf(g_json_file, "      \"timestamp_nsec\": %ld,\n", ts.tv_nsec);
+    fprintf(g_json_file, "      \"function\": \"%s\",\n", func_name);
+    fprintf(g_json_file, "      \"caller_address\": \"%p\",\n", caller_addr);
+
+    if (found) {
+        fprintf(g_json_file, "      \"caller_offset\": \"0x%lx\",\n", offset);
+        fprintf(g_json_file, "      \"caller_module\": \"%s\",\n", basename);
+    } else {
+        fprintf(g_json_file, "      \"caller_offset\": null,\n");
+        fprintf(g_json_file, "      \"caller_module\": null,\n");
+    }
+
+    fprintf(g_json_file, "      \"arguments\": {\n");
+
+    /* Standard string-escaped arguments */
+    for (int i = 0; i < arg_count; i++) {
+        char* escaped_value = escape_json_string(arg_values[i]);
+        fprintf(g_json_file, "        \"%s\": %s,\n", arg_names[i], escaped_value);
+        free_escaped_string(escaped_value);
+    }
+
+    /* Last field as raw JSON (array / sub-object) — no escaping */
+    fprintf(g_json_file, "        \"%s\": %s\n",
+            raw_field_name,
+            raw_field_value ? raw_field_value : "null");
+
     fprintf(g_json_file, "      }\n");
     fprintf(g_json_file, "    }");
     fflush(g_json_file);

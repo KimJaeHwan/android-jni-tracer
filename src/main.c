@@ -155,7 +155,10 @@ int main(int argc, char* argv[]) {
         /* Step 3: Prepare fake JavaVM */
         FakeJavaVM fake_vm;
         fake_vm.functions = &fake_vm_funcs;
-        
+
+        /* Register fake JavaVM so GetJavaVM() stub can return the correct pointer */
+        set_fake_javavm((JavaVM*)&fake_vm);
+
         log_info("Fake JavaVM created");
 
         /* Step 4: Prepare fake JNIEnv */
