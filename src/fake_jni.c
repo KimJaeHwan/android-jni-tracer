@@ -70,6 +70,160 @@ static const char* get_class_name(jclass clazz) {
     return "Unknown";
 }
 
+/* ============================================
+ * STRING POOL
+ * Maps jstring handles to real UTF-8 / UTF-16 data so that subsequent
+ * calls like GetStringUTFChars / GetStringLength see the actual content
+ * instead of NULL / "FakeString" / 0.
+ * ============================================ */
+
+#define MAX_STRINGS 512
+
+typedef struct {
+    jstring  handle;
+    char*    utf8;        /* owned, null-terminated              */
+    jchar*   utf16;       /* owned, null-terminated (extra slot) */
+    jsize    utf8_len;    /* byte length, not counting null      */
+    jsize    utf16_len;   /* char count,  not counting null      */
+} StringEntry;
+
+static StringEntry  string_table[MAX_STRINGS];
+static int          string_count   = 0;
+static uintptr_t    next_string_id = 0x70000;
+
+/* ---- UTF helpers ---- */
+
+/* UTF-8 → UTF-16 (BMP only; 4-byte sequences become U+FFFD) */
+static jchar* sp_utf8_to_utf16(const char* utf8, jsize* out_len) {
+    if (!utf8) { *out_len = 0; return NULL; }
+    size_t bytes = strlen(utf8);
+    jchar* out = (jchar*)malloc((bytes + 1) * sizeof(jchar));
+    if (!out) { *out_len = 0; return NULL; }
+    jsize n = 0;
+    const unsigned char* p = (const unsigned char*)utf8;
+    while (*p) {
+        unsigned int cp;
+        if (*p < 0x80) {
+            cp = *p++;
+        } else if ((*p & 0xE0) == 0xC0 && p[1]) {
+            cp  = (*p++ & 0x1F) << 6;
+            cp |= (*p++ & 0x3F);
+        } else if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) {
+            cp  = (*p++ & 0x0F) << 12;
+            cp |= (*p++ & 0x3F) << 6;
+            cp |= (*p++ & 0x3F);
+        } else {
+            p++;
+            cp = 0xFFFD; /* replacement character */
+        }
+        out[n++] = (jchar)(cp & 0xFFFF);
+    }
+    out[n] = 0;
+    *out_len = n;
+    return out;
+}
+
+/* UTF-16 → UTF-8 (BMP only) */
+static char* sp_utf16_to_utf8(const jchar* utf16, jsize len) {
+    if (!utf16 || len <= 0) {
+        char* e = (char*)malloc(1);
+        if (e) e[0] = '\0';
+        return e;
+    }
+    /* Worst case: every BMP code point needs 3 UTF-8 bytes */
+    char* out = (char*)malloc((size_t)len * 3 + 1);
+    if (!out) return NULL;
+    char* p = out;
+    for (jsize i = 0; i < len; i++) {
+        unsigned int cp = (unsigned int)utf16[i];
+        if (cp < 0x80) {
+            *p++ = (char)cp;
+        } else if (cp < 0x800) {
+            *p++ = (char)(0xC0 | (cp >> 6));
+            *p++ = (char)(0x80 | (cp & 0x3F));
+        } else {
+            *p++ = (char)(0xE0 | (cp >> 12));
+            *p++ = (char)(0x80 | ((cp >> 6) & 0x3F));
+            *p++ = (char)(0x80 | (cp & 0x3F));
+        }
+    }
+    *p = '\0';
+    return out;
+}
+
+/* ---- Pool operations ---- */
+
+/* Register a UTF-8 string and return a unique jstring handle */
+static jstring pool_intern_utf8(const char* utf8) {
+    if (string_count >= MAX_STRINGS) return (jstring)0x7FFFF;
+    const char* src = utf8 ? utf8 : "";
+
+    /* Deduplicate: return existing handle for identical content */
+    for (int i = 0; i < string_count; i++) {
+        if (strcmp(string_table[i].utf8, src) == 0)
+            return string_table[i].handle;
+    }
+
+    char* u8 = strdup(src);
+    if (!u8) return (jstring)0x7FFFE;
+
+    jsize u16_len;
+    jchar* u16 = sp_utf8_to_utf16(u8, &u16_len);
+
+    jstring handle = (jstring)(next_string_id);
+    next_string_id += 0x10;
+
+    StringEntry* e    = &string_table[string_count++];
+    e->handle         = handle;
+    e->utf8           = u8;
+    e->utf16          = u16;
+    e->utf8_len       = (jsize)strlen(u8);
+    e->utf16_len      = u16_len;
+    return handle;
+}
+
+/* Register a UTF-16 string and return a unique jstring handle */
+static jstring pool_intern_utf16(const jchar* chars, jsize len) {
+    if (string_count >= MAX_STRINGS) return (jstring)0x7FFFF;
+
+    jchar* u16 = (jchar*)malloc(((size_t)len + 1) * sizeof(jchar));
+    if (!u16) return (jstring)0x7FFFE;
+    if (chars && len > 0) memcpy(u16, chars, (size_t)len * sizeof(jchar));
+    u16[len] = 0;
+
+    char* u8 = sp_utf16_to_utf8(u16, len);
+
+    jstring handle = (jstring)(next_string_id);
+    next_string_id += 0x10;
+
+    StringEntry* e    = &string_table[string_count++];
+    e->handle         = handle;
+    e->utf8           = u8 ? u8 : strdup("");
+    e->utf16          = u16;
+    e->utf8_len       = u8 ? (jsize)strlen(u8) : 0;
+    e->utf16_len      = len;
+    return handle;
+}
+
+/* Look up entry by handle; returns NULL if not found */
+static StringEntry* pool_find(jstring handle) {
+    for (int i = 0; i < string_count; i++) {
+        if (string_table[i].handle == handle)
+            return &string_table[i];
+    }
+    return NULL;
+}
+
+/* Release all pool memory */
+static void pool_destroy(void) {
+    for (int i = 0; i < string_count; i++) {
+        free(string_table[i].utf8);
+        free(string_table[i].utf16);
+    }
+    string_count   = 0;
+    next_string_id = 0x70000;
+}
+
 /* Helper macros for argument logging */
 #define LOG_CALL_START(funcname) \
     log_jni_call(funcname, "")
@@ -730,68 +884,99 @@ static void JNICALL fake_SetStaticObjectField(JNIEnv* env, jclass clazz, jfieldI
  * ============================================ */
 
 static jstring JNICALL fake_NewString(JNIEnv* env, const jchar* unicodeChars, jsize len) {
-    LOG_CALL_1("NewString", "len=%d", len);
+    jstring s = pool_intern_utf16(unicodeChars, len);
+
+    /* Convert to UTF-8 for the log message */
+    char* preview = sp_utf16_to_utf8(unicodeChars, len);
+    LOG_CALL_3("NewString", "len=%d, preview=\"%s\", jstring=%p",
+               len, preview ? preview : "", s);
+    free(preview);
+
+    const char* arg_names[] = {"env", "len", "jstring"};
+    char arg_values[3][64];
+    snprintf(arg_values[0], 64, "%p", (void*)env);
+    snprintf(arg_values[1], 64, "%d", len);
+    snprintf(arg_values[2], 64, "%p", (void*)s);
+    const char* arg_value_ptrs[] = {arg_values[0], arg_values[1], arg_values[2]};
+    log_jni_call_json("NewString", arg_names, arg_value_ptrs, 3);
+
     increment_call_count("NewString");
-    return (jstring)0x6000;
+    return s;
 }
 
 static jsize JNICALL fake_GetStringLength(JNIEnv* env, jstring string) {
-    LOG_CALL_1("GetStringLength", "string=%p", string);
+    StringEntry* e = pool_find(string);
+    jsize len = e ? e->utf16_len : 0;
+    LOG_CALL_2("GetStringLength", "string=%p, len=%d", string, len);
     increment_call_count("GetStringLength");
-    return 0;
+    return len;
 }
 
 static const jchar* JNICALL fake_GetStringChars(JNIEnv* env, jstring string, jboolean* isCopy) {
-    LOG_CALL_1("GetStringChars", "string=%p", string);
+    StringEntry* e = pool_find(string);
+    LOG_CALL_2("GetStringChars", "string=%p, utf8=\"%s\"",
+               string, e ? e->utf8 : "(not in pool)");
     increment_call_count("GetStringChars");
     if (isCopy) *isCopy = JNI_FALSE;
-    return NULL;
+    return e ? e->utf16 : NULL;
 }
 
 static void JNICALL fake_ReleaseStringChars(JNIEnv* env, jstring string, const jchar* chars) {
     LOG_CALL_2("ReleaseStringChars", "string=%p, chars=%p", string, chars);
     increment_call_count("ReleaseStringChars");
+    /* Pool owns the UTF-16 buffer — nothing to free */
 }
 
 static jstring JNICALL fake_NewStringUTF(JNIEnv* env, const char* bytes) {
-    LOG_CALL_1("NewStringUTF", "bytes=%s", bytes ? bytes : "NULL");
-    
-    const char* arg_names[] = {"env", "bytes"};
-    char arg_values[2][256];
+    jstring s = pool_intern_utf8(bytes);
+
+    LOG_CALL_2("NewStringUTF", "bytes=\"%s\", jstring=%p",
+               bytes ? bytes : "NULL", s);
+
+    const char* arg_names[] = {"env", "bytes", "jstring"};
+    char arg_values[3][256];
     snprintf(arg_values[0], 256, "%p", (void*)env);
     snprintf(arg_values[1], 256, "%s", bytes ? bytes : "NULL");
-    const char* arg_value_ptrs[] = {arg_values[0], arg_values[1]};
-    log_jni_call_json("NewStringUTF", arg_names, arg_value_ptrs, 2);
-    
+    snprintf(arg_values[2], 256, "%p", (void*)s);
+    const char* arg_value_ptrs[] = {arg_values[0], arg_values[1], arg_values[2]};
+    log_jni_call_json("NewStringUTF", arg_names, arg_value_ptrs, 3);
+
     increment_call_count("NewStringUTF");
-    return (jstring)0x6001;
+    return s;
 }
 
 static jsize JNICALL fake_GetStringUTFLength(JNIEnv* env, jstring string) {
-    LOG_CALL_1("GetStringUTFLength", "string=%p", string);
+    StringEntry* e = pool_find(string);
+    jsize len = e ? e->utf8_len : 0;
+    LOG_CALL_2("GetStringUTFLength", "string=%p, len=%d", string, len);
     increment_call_count("GetStringUTFLength");
-    return 0;
+    return len;
 }
 
 static const char* JNICALL fake_GetStringUTFChars(JNIEnv* env, jstring string, jboolean* isCopy) {
-    LOG_CALL_1("GetStringUTFChars", "string=%p", string);
-    
-    const char* arg_names[] = {"env", "string", "isCopy"};
-    char arg_values[3][64];
-    snprintf(arg_values[0], 64, "%p", (void*)env);
-    snprintf(arg_values[1], 64, "%p", (void*)string);
-    snprintf(arg_values[2], 64, "%p", (void*)isCopy);
+    StringEntry* e = pool_find(string);
+    const char*  result = e ? e->utf8 : "";
+
+    LOG_CALL_2("GetStringUTFChars", "string=%p, value=\"%s\"", string, result);
+
+    const char* arg_names[] = {"env", "string", "value"};
+    char arg_values[3][256];
+    snprintf(arg_values[0], 256, "%p", (void*)env);
+    snprintf(arg_values[1], 256, "%p", (void*)string);
+    snprintf(arg_values[2], 256, "%s", result);
     const char* arg_value_ptrs[] = {arg_values[0], arg_values[1], arg_values[2]};
     log_jni_call_json("GetStringUTFChars", arg_names, arg_value_ptrs, 3);
-    
+
     increment_call_count("GetStringUTFChars");
     if (isCopy) *isCopy = JNI_FALSE;
-    return "FakeString";
+    return result;
 }
 
 static void JNICALL fake_ReleaseStringUTFChars(JNIEnv* env, jstring string, const char* utf) {
-    LOG_CALL_2("ReleaseStringUTFChars", "string=%p, utf=%s", string, utf ? utf : "NULL");
+    LOG_CALL_2("ReleaseStringUTFChars", "string=%p, utf=\"%s\"",
+               string, utf ? utf : "NULL");
     increment_call_count("ReleaseStringUTFChars");
+    /* Pool owns the UTF-8 buffer — nothing to free */
 }
 
 /* ============================================
@@ -1023,8 +1208,11 @@ static jint JNICALL fake_GetJavaVM(JNIEnv* env, JavaVM** vm) {
 static void JNICALL fake_GetStringRegion(JNIEnv* env, jstring str, jsize start, jsize len, jchar* buf) {
     LOG_CALL_3("GetStringRegion", "str=%p, start=%d, len=%d", str, start, len);
     increment_call_count("GetStringRegion");
-    /* Zero-fill output buffer so callers don't read uninitialized memory */
-    if (buf && len > 0) {
+    if (!buf || len <= 0) return;
+    StringEntry* e = pool_find(str);
+    if (e && e->utf16 && start >= 0 && (start + len) <= e->utf16_len) {
+        memcpy(buf, e->utf16 + start, (size_t)len * sizeof(jchar));
+    } else {
         memset(buf, 0, (size_t)len * sizeof(jchar));
     }
 }
@@ -1032,9 +1220,21 @@ static void JNICALL fake_GetStringRegion(JNIEnv* env, jstring str, jsize start, 
 static void JNICALL fake_GetStringUTFRegion(JNIEnv* env, jstring str, jsize start, jsize len, char* buf) {
     LOG_CALL_3("GetStringUTFRegion", "str=%p, start=%d, len=%d", str, start, len);
     increment_call_count("GetStringUTFRegion");
-    /* Zero-fill output buffer so callers don't read uninitialized memory */
-    if (buf && len > 0) {
-        memset(buf, 0, (size_t)len * sizeof(char));
+    if (!buf || len <= 0) return;
+    StringEntry* e = pool_find(str);
+    /* JNI spec: start/len are in UTF-16 units; output is UTF-8 */
+    if (e && e->utf16 && start >= 0 && (start + len) <= e->utf16_len) {
+        char* sub = sp_utf16_to_utf8(e->utf16 + start, len);
+        if (sub) {
+            size_t sub_len = strlen(sub);
+            memcpy(buf, sub, sub_len);
+            buf[sub_len] = '\0';
+            free(sub);
+        } else {
+            memset(buf, 0, (size_t)len);
+        }
+    } else {
+        memset(buf, 0, (size_t)len);
     }
 }
 
@@ -1055,15 +1255,18 @@ static void JNICALL fake_ReleasePrimitiveArrayCritical(JNIEnv* env, jarray array
 }
 
 static const jchar* JNICALL fake_GetStringCritical(JNIEnv* env, jstring string, jboolean* isCopy) {
-    LOG_CALL_1("GetStringCritical", "string=%p", string);
+    StringEntry* e = pool_find(string);
+    LOG_CALL_2("GetStringCritical", "string=%p, utf8=\"%s\"",
+               string, e ? e->utf8 : "(not in pool)");
     increment_call_count("GetStringCritical");
     if (isCopy) *isCopy = JNI_FALSE;
-    return NULL;
+    return e ? e->utf16 : NULL;
 }
 
 static void JNICALL fake_ReleaseStringCritical(JNIEnv* env, jstring string, const jchar* carray) {
     LOG_CALL_2("ReleaseStringCritical", "string=%p, carray=%p", string, carray);
     increment_call_count("ReleaseStringCritical");
+    /* Pool owns the buffer — nothing to free */
 }
 
 /* ============================================
@@ -1416,6 +1619,6 @@ JNIEnv* create_fake_jnienv(void) {
 }
 
 void destroy_fake_jnienv(JNIEnv* env) {
-    /* Nothing to cleanup for now */
     (void)env;
+    pool_destroy();
 }
