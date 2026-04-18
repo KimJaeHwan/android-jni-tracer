@@ -152,6 +152,7 @@ Execution MCP tools:
 - `validate_mock_config`: inline mock JSON 검증
 - `run_harness`: `JNI_OnLoad` 관측 run 생성
 - `run_invoke_plan`: inline invoke plan으로 run 생성
+- `rerun_with_mock`: 기존 run 조건을 재사용해 mock 적용 run을 만들고 diff 반환
 
 ## 🔧 빌드 요구사항
 

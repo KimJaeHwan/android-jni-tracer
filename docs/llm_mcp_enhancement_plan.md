@@ -676,6 +676,11 @@ rerun_with_mock(base_run_id, mock_overrides, label=None)
 - `validate_mock_config`
 - `run_harness`
 - `run_invoke_plan`
+- `rerun_with_mock`
+
+`rerun_with_mock`는 base run의 `so_name`과 archived `invoke_plan`을 계승하고,
+inline mock config만 바꿔 새 run을 만든 뒤 base run과의 diff를 즉시 반환한다.
+LLM 입장에서는 "이 mock이 관측 결과를 바꾸는가?"를 한 번의 tool call로 확인할 수 있다.
 
 ### 8.3 안전 규칙
 
@@ -692,10 +697,10 @@ rerun_with_mock(base_run_id, mock_overrides, label=None)
 
 - [x] `run_harness`가 MCP에서 Android run을 생성한다.
 - [x] `run_invoke_plan`이 MCP에서 Android invoke run을 생성한다.
+- [x] `rerun_with_mock`가 base run과 mock run을 생성한다.
 - [x] `diff_runs`로 변화가 확인된다.
 - [x] 허용되지 않은 경로의 SO 실행이 거부된다.
 - [x] timeout과 실패 로그가 구조화된다.
-- [ ] `rerun_with_mock`가 base run과 mock run을 생성한다.
 
 ---
 

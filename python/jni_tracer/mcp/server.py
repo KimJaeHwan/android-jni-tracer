@@ -7,7 +7,13 @@ from typing import Any
 from ..diff import diff_logs
 from ..log import filter_calls, load_log, registered_natives, summary
 from ..store import list_runs, run_log_path, run_manifest, run_summary
-from .execution import ExecutionConfig, run_harness_tool, run_invoke_plan_tool, validate_mock_config_tool
+from .execution import (
+    ExecutionConfig,
+    rerun_with_mock_tool,
+    run_harness_tool,
+    run_invoke_plan_tool,
+    validate_mock_config_tool,
+)
 
 
 JSONDict = dict[str, Any]
@@ -105,6 +111,7 @@ def execution_tools(config: ExecutionConfig) -> list[JSONDict]:
     so_name = {"type": "string", "description": "SO filename inside configured --libs-dir"}
     label = {"type": "string", "description": "Optional run label"}
     timeout_sec = {"type": "integer", "description": "Per-run timeout in seconds"}
+    base_run_id = {"type": "string", "description": "Base run id to rerun with mock config"}
     invoke_plan = {
         "type": "array",
         "description": "Invoke plan entries accepted by the native harness",
@@ -141,6 +148,23 @@ def execution_tools(config: ExecutionConfig) -> list[JSONDict]:
                     "timeout_sec": timeout_sec,
                 },
                 ["so_name", "invoke_plan"],
+            ),
+        },
+        {
+            "name": "rerun_with_mock",
+            "description": "Rerun a base run with an inline mock config and return the diff.",
+            "inputSchema": tool_schema(
+                {
+                    "base_run_id": base_run_id,
+                    "label": label,
+                    "mock_config": mock_config,
+                    "reuse_invoke_plan": {
+                        "type": "boolean",
+                        "description": "Reuse the base run invoke_plan when present",
+                    },
+                    "timeout_sec": timeout_sec,
+                },
+                ["base_run_id", "mock_config"],
             ),
         },
     ]
@@ -187,6 +211,8 @@ def dispatch_tool(default_runs_root: str, execution_config: ExecutionConfig, nam
         return content_response(run_harness_tool(execution_config, runs_root, args))
     if name == "run_invoke_plan":
         return content_response(run_invoke_plan_tool(execution_config, runs_root, args))
+    if name == "rerun_with_mock":
+        return content_response(rerun_with_mock_tool(execution_config, runs_root, args))
     raise ValueError(f"unknown tool: {name}")
 
 

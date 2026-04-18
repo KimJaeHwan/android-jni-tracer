@@ -116,6 +116,7 @@ Additional tools in execution mode:
 
 - `run_harness`
 - `run_invoke_plan`
+- `rerun_with_mock`
 
 `validate_mock_config` is always available because it does not execute the
 harness. Execution tools only accept `so_name` as a filename inside
@@ -123,3 +124,7 @@ harness. Execution tools only accept `so_name` as a filename inside
 creates a normal `runs/<run_id>/` directory with `manifest.json`,
 `summary.json`, logs, and archived inline `mock.json` or `invoke_plan.json`
 when provided.
+
+`rerun_with_mock` takes a `base_run_id`, validates an inline mock config,
+reruns the same target SO, reuses the base run invoke plan when present, and
+returns the new run plus an immediate diff against the base run.

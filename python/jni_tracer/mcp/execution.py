@@ -5,10 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..diff import diff_logs
 from ..log import load_log, summary
 from ..mock import validate_mock_data
 from ..runner import adb_run
-from ..store import read_json
+from ..store import read_json, run_log_path, run_manifest
 from .safety import clamp_timeout, resolve_existing_file, validate_target_so
 
 
@@ -69,6 +70,13 @@ def _run_result(run_dir: Path) -> JSONDict:
         "manifest": manifest,
         "next_tools": ["get_run", "get_summary", "get_calls", "diff_runs"],
     }
+
+
+def _optional_bool(args: JSONDict, key: str, default: bool) -> bool:
+    value = args.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be a boolean")
+    return value
 
 
 def run_harness_tool(config: ExecutionConfig, runs_root: str, args: JSONDict) -> JSONDict:
@@ -144,6 +152,73 @@ def run_invoke_plan_tool(config: ExecutionConfig, runs_root: str, args: JSONDict
             },
         )
     return _run_result(run_dir)
+
+
+def rerun_with_mock_tool(config: ExecutionConfig, runs_root: str, args: JSONDict) -> JSONDict:
+    base_run_id = args.get("base_run_id")
+    if not isinstance(base_run_id, str) or not base_run_id:
+        raise ValueError("base_run_id must be a non-empty string")
+
+    base_manifest = run_manifest(runs_root, base_run_id)
+    so_name = config.checked_so_name(base_manifest.get("so_name"))
+    timeout_sec = clamp_timeout(args.get("timeout_sec"), int(base_manifest.get("timeout_sec") or config.timeout_sec))
+    reuse_invoke_plan = _optional_bool(args, "reuse_invoke_plan", True)
+    label = args.get("label")
+    if label is not None and not isinstance(label, str):
+        raise ValueError("label must be a string")
+
+    mock_config = args.get("mock_config")
+    errors = validate_mock_data(mock_config)
+    if errors:
+        return {"status": "invalid_mock", "errors": errors}
+
+    base_plan: Path | None = None
+    base_invoke_plan = base_manifest.get("invoke_plan")
+    if reuse_invoke_plan and isinstance(base_invoke_plan, str) and base_invoke_plan:
+        candidate = Path(base_invoke_plan)
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        if candidate.is_file():
+            base_plan = candidate
+
+    with tempfile.TemporaryDirectory(prefix="jni-tracer-mcp-") as tmp:
+        tmp_dir = Path(tmp)
+        mock_path = tmp_dir / "mock.json"
+        _write_json(mock_path, mock_config)
+
+        run_dir = adb_run(
+            harness=config.checked_harness(),
+            libs_dir=str(config.libs_dir),
+            so_name=so_name,
+            runs_root=runs_root,
+            label=label or f"rerun_mock_{base_run_id}",
+            device_dir=config.device_dir,
+            mock=mock_path,
+            invoke_plan=base_plan,
+            timeout_sec=timeout_sec,
+            metadata={
+                "mcp_tool": "rerun_with_mock",
+                "base_run_id": base_run_id,
+                "reuse_invoke_plan": reuse_invoke_plan,
+                "base_invoke_plan": str(base_plan) if base_plan else None,
+                "timeout_sec": timeout_sec,
+            },
+        )
+
+    result = _run_result(run_dir)
+    experiment_run_id = str(result.get("run_id"))
+    base_log = load_log(run_log_path(runs_root, base_run_id))
+    experiment_log = load_log(run_log_path(runs_root, experiment_run_id))
+    result.update(
+        {
+            "base_run_id": base_run_id,
+            "experiment_run_id": experiment_run_id,
+            "reuse_invoke_plan": reuse_invoke_plan,
+            "diff": diff_logs(base_log, experiment_log),
+            "next_tools": ["get_calls", "get_summary", "diff_runs", "rerun_with_mock"],
+        }
+    )
+    return result
 
 
 def validate_mock_config_tool(args: JSONDict) -> JSONDict:
