@@ -418,6 +418,10 @@ PYTHONPATH=python python3 -m jni_tracer run \
 PYTHONPATH=python python3 -m jni_tracer runs list
 PYTHONPATH=python python3 -m jni_tracer runs show <run_id>
 PYTHONPATH=python python3 -m jni_tracer runs summary <run_id>
+PYTHONPATH=python python3 -m jni_tracer runs natives <run_id>
+PYTHONPATH=python python3 -m jni_tracer runs classes <run_id>
+PYTHONPATH=python python3 -m jni_tracer runs calls <run_id> --function InvokeNative
+PYTHONPATH=python python3 -m jni_tracer runs diff <base_run_id> <experiment_run_id>
 ```
 
 ### 4.5 T1 완료 조건
@@ -438,12 +442,13 @@ PYTHONPATH=python python3 -m jni_tracer runs summary <run_id>
 
 LLM 에이전트는 파일 경로보다 run id를 다루는 편이 안전하다.
 
-따라서 모든 실행을 SQLite에 저장한다.
+현재 1차 구현은 `runs/<run_id>/` 파일 기반 store를 사용한다.
+SQLite store는 run 수가 늘어나 검색/인덱싱이 필요해지는 시점에 도입한다.
 
 기본 저장 위치:
 
 ```text
-~/.cache/jni-tracer/runs.sqlite
+runs/<run_id>/
 ```
 
 ### 5.2 DB 스키마
@@ -503,10 +508,10 @@ CREATE TABLE mock_configs (
 
 ### 5.4 T2 완료 조건
 
-- [ ] 실행 결과가 run id로 저장된다.
+- [x] 실행 결과가 run id로 저장된다.
 - [ ] mock config가 hash 기반으로 저장된다.
-- [ ] 두 run의 diff를 JSON으로 출력할 수 있다.
-- [ ] diff가 LLM이 읽기 쉬운 요약 필드를 포함한다.
+- [x] 두 run의 diff를 JSON으로 출력할 수 있다.
+- [x] diff가 LLM이 읽기 쉬운 요약 필드를 포함한다.
 
 ---
 
@@ -574,6 +579,12 @@ LLM이 안전하게 기존 로그와 run store를 조회할 수 있게 한다.
 jni-tracer mcp serve
 ```
 
+현재 stdlib 기반 read-only 서버는 다음 명령으로 실행한다.
+
+```bash
+PYTHONPATH=python python3 -m jni_tracer mcp serve --runs-root runs
+```
+
 ### 7.2 Read-only tools
 
 권장 도구:
@@ -618,10 +629,10 @@ FindClass가 많이 호출되었습니다. 아마 클래스 조회를 많이 한
 
 ### 7.4 T4 완료 조건
 
-- [ ] MCP 서버가 read-only로 실행된다.
-- [ ] LLM/MCP 클라이언트가 run 목록과 calls를 조회할 수 있다.
-- [ ] `diff_runs`가 구조화 diff를 반환한다.
-- [ ] 실행 도구는 아직 노출하지 않는다.
+- [x] MCP 서버가 read-only로 실행된다.
+- [x] LLM/MCP 클라이언트가 run 목록과 calls를 조회할 수 있다.
+- [x] `diff_runs`가 구조화 diff를 반환한다.
+- [x] 실행 도구는 아직 노출하지 않는다.
 
 ---
 
@@ -727,7 +738,7 @@ Phase 4 이후 `jni-analyzer`의 Dynamic Agent는 tracer MCP에 의존한다.
 
 ### P3
 
-- [ ] MCP read-only server
+- [x] MCP read-only server
 - [ ] MCP execution opt-in
 - [ ] `rerun_with_mock`
 

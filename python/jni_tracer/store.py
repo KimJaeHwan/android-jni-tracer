@@ -44,3 +44,22 @@ def list_runs(root: str | Path) -> list[dict[str, Any]]:
             except Exception:
                 records.append({"run_id": item.name, "status": "manifest_error"})
     return records
+
+
+def run_dir(root: str | Path, run_id: str) -> Path:
+    return Path(root) / run_id
+
+
+def run_manifest(root: str | Path, run_id: str) -> dict[str, Any]:
+    return read_json(run_dir(root, run_id) / "manifest.json")
+
+
+def run_summary(root: str | Path, run_id: str) -> dict[str, Any]:
+    return read_json(run_dir(root, run_id) / "summary.json")
+
+
+def run_log_path(root: str | Path, run_id: str) -> Path:
+    path = run_dir(root, run_id) / "logs" / "jni_hook.json"
+    if not path.exists():
+        raise FileNotFoundError(f"run log not found: {path}")
+    return path

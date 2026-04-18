@@ -4,15 +4,15 @@ import argparse
 import json
 import subprocess
 import sys
-from pathlib import Path
 from typing import Any
 
 from .diff import diff_logs
 from .log import filter_calls, load_log, registered_natives, summary, validate_log
 from .mock import template as mock_template
 from .mock import validate_mock
+from .mcp.server import serve as mcp_serve
 from .runner import adb_run
-from .store import list_runs, read_json
+from .store import list_runs, run_log_path, run_manifest, run_summary
 
 
 def print_json(data: Any) -> None:
@@ -73,10 +73,32 @@ def cmd_runs(args: argparse.Namespace) -> int:
         print_json(list_runs(args.runs_root))
         return 0
     if args.runs_cmd == "show":
-        print_json(read_json(Path(args.runs_root) / args.run_id / "manifest.json"))
+        print_json(run_manifest(args.runs_root, args.run_id))
         return 0
     if args.runs_cmd == "summary":
-        print_json(read_json(Path(args.runs_root) / args.run_id / "summary.json"))
+        print_json(run_summary(args.runs_root, args.run_id))
+        return 0
+    if args.runs_cmd == "calls":
+        data = load_log(run_log_path(args.runs_root, args.run_id))
+        print_json(
+            filter_calls(
+                data,
+                function=args.function,
+                class_name=args.class_name,
+                method_name=args.method_name,
+            )
+        )
+        return 0
+    if args.runs_cmd == "natives":
+        print_json(registered_natives(load_log(run_log_path(args.runs_root, args.run_id))))
+        return 0
+    if args.runs_cmd == "classes":
+        print_json(summary(load_log(run_log_path(args.runs_root, args.run_id)))["classes"])
+        return 0
+    if args.runs_cmd == "diff":
+        a = load_log(run_log_path(args.runs_root, args.run_a))
+        b = load_log(run_log_path(args.runs_root, args.run_b))
+        print_json(diff_logs(a, b))
         return 0
     raise SystemExit(f"unknown runs command: {args.runs_cmd}")
 
@@ -97,6 +119,11 @@ def cmd_mock(args: argparse.Namespace) -> int:
 
 def cmd_diff(args: argparse.Namespace) -> int:
     print_json(diff_logs(load_log(args.a), load_log(args.b)))
+    return 0
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    mcp_serve(args.runs_root)
     return 0
 
 
@@ -141,6 +168,23 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("run_id")
         p.add_argument("--runs-root", default="runs")
         p.set_defaults(func=cmd_runs)
+    p = runs_sub.add_parser("calls")
+    p.add_argument("run_id")
+    p.add_argument("--runs-root", default="runs")
+    p.add_argument("--function")
+    p.add_argument("--class-name")
+    p.add_argument("--method-name")
+    p.set_defaults(func=cmd_runs)
+    for name in ("natives", "classes"):
+        p = runs_sub.add_parser(name)
+        p.add_argument("run_id")
+        p.add_argument("--runs-root", default="runs")
+        p.set_defaults(func=cmd_runs)
+    p = runs_sub.add_parser("diff")
+    p.add_argument("run_a")
+    p.add_argument("run_b")
+    p.add_argument("--runs-root", default="runs")
+    p.set_defaults(func=cmd_runs)
 
     mock = sub.add_parser("mock", help="Create and validate mock config files")
     mock_sub = mock.add_subparsers(dest="mock_cmd", required=True)
@@ -154,6 +198,12 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("a")
     diff.add_argument("b")
     diff.set_defaults(func=cmd_diff)
+
+    mcp = sub.add_parser("mcp", help="Run MCP read-only server")
+    mcp_sub = mcp.add_subparsers(dest="mcp_cmd", required=True)
+    serve = mcp_sub.add_parser("serve")
+    serve.add_argument("--runs-root", default="runs")
+    serve.set_defaults(func=cmd_mcp)
 
     return parser
 

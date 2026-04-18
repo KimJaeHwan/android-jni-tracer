@@ -117,6 +117,23 @@ runs/<run_id>/
     jni_hook.json
 ```
 
+저장된 run은 파일 경로 대신 run id로 다시 조회할 수 있다.
+
+```bash
+PYTHONPATH=python python3 -m jni_tracer runs list
+PYTHONPATH=python python3 -m jni_tracer runs summary <run_id>
+PYTHONPATH=python python3 -m jni_tracer runs natives <run_id>
+PYTHONPATH=python python3 -m jni_tracer runs calls <run_id> --function InvokeNative
+PYTHONPATH=python python3 -m jni_tracer runs diff <base_run_id> <experiment_run_id>
+```
+
+LLM/MCP 클라이언트 연동을 위한 read-only MCP 서버도 제공한다.
+이 서버는 기존 run store만 조회하며 adb 실행 기능은 노출하지 않는다.
+
+```bash
+PYTHONPATH=python python3 -m jni_tracer mcp serve --runs-root runs
+```
+
 ## 🔧 빌드 요구사항
 
 ### Windows 환경
