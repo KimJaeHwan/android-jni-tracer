@@ -30,7 +30,7 @@ static int clock_gettime(int clk_id, struct timespec *spec) {
 #endif
 
 /* Module info for address-to-offset conversion */
-#define MAX_MODULES 128
+#define MAX_MODULES 1024
 typedef struct {
     unsigned long base_addr;
     unsigned long end_addr;

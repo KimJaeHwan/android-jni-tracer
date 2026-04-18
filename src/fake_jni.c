@@ -71,6 +71,67 @@ static const char* get_class_name(jclass clazz) {
     return "Unknown";
 }
 
+jclass fake_jni_find_class(const char* class_name) {
+    return register_class(class_name ? class_name : "Unknown");
+}
+
+/* ============================================
+ * NATIVE REGISTRY
+ * Captures RegisterNatives entries so the harness can invoke a registered
+ * native function by Java class/name/signature after JNI_OnLoad completes.
+ * ============================================ */
+
+#define MAX_NATIVE_REGISTRY 1024
+
+static NativeRegistryEntry native_registry[MAX_NATIVE_REGISTRY];
+static int native_registry_count = 0;
+
+static void native_registry_register(const char* class_name,
+                                     const char* method_name,
+                                     const char* signature,
+                                     void* fnPtr) {
+    const char* cn = class_name ? class_name : "Unknown";
+    const char* mn = method_name ? method_name : "NULL";
+    const char* sg = signature ? signature : "NULL";
+
+    for (int i = 0; i < native_registry_count; i++) {
+        if (strcmp(native_registry[i].class_name, cn) == 0 &&
+            strcmp(native_registry[i].method_name, mn) == 0 &&
+            strcmp(native_registry[i].signature, sg) == 0) {
+            native_registry[i].fnPtr = fnPtr;
+            return;
+        }
+    }
+
+    if (native_registry_count >= MAX_NATIVE_REGISTRY) {
+        log_warning("Native registry full; skipping %s.%s%s", cn, mn, sg);
+        return;
+    }
+
+    NativeRegistryEntry* e = &native_registry[native_registry_count++];
+    strncpy(e->class_name, cn, sizeof(e->class_name) - 1);
+    e->class_name[sizeof(e->class_name) - 1] = '\0';
+    strncpy(e->method_name, mn, sizeof(e->method_name) - 1);
+    e->method_name[sizeof(e->method_name) - 1] = '\0';
+    strncpy(e->signature, sg, sizeof(e->signature) - 1);
+    e->signature[sizeof(e->signature) - 1] = '\0';
+    e->fnPtr = fnPtr;
+}
+
+const NativeRegistryEntry* native_registry_find(const char* class_name,
+                                                const char* method_name,
+                                                const char* signature) {
+    if (!class_name || !method_name || !signature) return NULL;
+    for (int i = 0; i < native_registry_count; i++) {
+        if (strcmp(native_registry[i].class_name, class_name) == 0 &&
+            strcmp(native_registry[i].method_name, method_name) == 0 &&
+            strcmp(native_registry[i].signature, signature) == 0) {
+            return &native_registry[i];
+        }
+    }
+    return NULL;
+}
+
 /* ============================================
  * STRING POOL
  * Maps jstring handles to real UTF-8 / UTF-16 data so that subsequent
@@ -181,6 +242,10 @@ static jstring pool_intern_utf8(const char* utf8) {
     e->utf8_len       = (jsize)strlen(u8);
     e->utf16_len      = u16_len;
     return handle;
+}
+
+jstring fake_jni_new_string_utf(const char* utf8) {
+    return pool_intern_utf8(utf8);
 }
 
 /* Register a UTF-16 string and return a unique jstring handle */
@@ -314,6 +379,68 @@ static void format_arg_value(char* buf, size_t bufsize, const void* ptr, const c
     }
 }
 
+/*
+ * Call*Method JSON logging must happen directly inside each JNI stub.
+ * json_logger.c uses __builtin_return_address(1) to recover the target
+ * SO call site, so wrapping log_jni_call_json() in a helper function would
+ * shift the stack frame and produce the wrong caller_offset.
+ */
+#define LOG_METHOD_CALL_JSON(FUNC_NAME, ENV_PTR, RECEIVER_NAME, RECEIVER_VALUE, METHOD_ID, METHOD_ENTRY, IS_STATIC_TEXT, RETURN_TYPE_TEXT, RETURN_VALUE_TEXT, MOCK_TEXT) \
+    do { \
+        const char* _arg_names[] = { \
+            "env", RECEIVER_NAME, "methodID", "resolved", "class_name", "method_name", \
+            "sig", "resolved_method", "is_static", "return_type", "return_value", "mock_applied" \
+        }; \
+        char _arg_values[12][512]; \
+        snprintf(_arg_values[0], sizeof(_arg_values[0]), "%p", (void*)(ENV_PTR)); \
+        snprintf(_arg_values[1], sizeof(_arg_values[1]), "%p", (void*)(RECEIVER_VALUE)); \
+        snprintf(_arg_values[2], sizeof(_arg_values[2]), "%p", (void*)(METHOD_ID)); \
+        if ((METHOD_ENTRY)) { \
+            snprintf(_arg_values[3], sizeof(_arg_values[3]), "true"); \
+            snprintf(_arg_values[4], sizeof(_arg_values[4]), "%s", (METHOD_ENTRY)->class_name); \
+            snprintf(_arg_values[5], sizeof(_arg_values[5]), "%s", (METHOD_ENTRY)->method_name); \
+            snprintf(_arg_values[6], sizeof(_arg_values[6]), "%s", (METHOD_ENTRY)->signature); \
+            snprintf(_arg_values[7], sizeof(_arg_values[7]), "%s.%s%s", \
+                     (METHOD_ENTRY)->class_name, (METHOD_ENTRY)->method_name, (METHOD_ENTRY)->signature); \
+        } else { \
+            snprintf(_arg_values[3], sizeof(_arg_values[3]), "false"); \
+            snprintf(_arg_values[4], sizeof(_arg_values[4]), "Unknown"); \
+            snprintf(_arg_values[5], sizeof(_arg_values[5]), "unknown"); \
+            snprintf(_arg_values[6], sizeof(_arg_values[6]), ""); \
+            snprintf(_arg_values[7], sizeof(_arg_values[7]), "unresolved"); \
+        } \
+        snprintf(_arg_values[8], sizeof(_arg_values[8]), "%s", IS_STATIC_TEXT); \
+        snprintf(_arg_values[9], sizeof(_arg_values[9]), "%s", RETURN_TYPE_TEXT); \
+        snprintf(_arg_values[10], sizeof(_arg_values[10]), "%s", RETURN_VALUE_TEXT); \
+        snprintf(_arg_values[11], sizeof(_arg_values[11]), "%s", MOCK_TEXT); \
+        const char* _arg_value_ptrs[] = { \
+            _arg_values[0], _arg_values[1], _arg_values[2], _arg_values[3], \
+            _arg_values[4], _arg_values[5], _arg_values[6], _arg_values[7], \
+            _arg_values[8], _arg_values[9], _arg_values[10], _arg_values[11] \
+        }; \
+        log_jni_call_json(FUNC_NAME, _arg_names, _arg_value_ptrs, 12); \
+    } while (0)
+
+#define LOG_SIMPLE_JSON_1(FUNC_NAME, ENV_PTR, NAME1, VALUE1) \
+    do { \
+        const char* _arg_names[] = {"env", NAME1}; \
+        char _arg_values[2][256]; \
+        snprintf(_arg_values[0], sizeof(_arg_values[0]), "%p", (void*)(ENV_PTR)); \
+        snprintf(_arg_values[1], sizeof(_arg_values[1]), "%s", VALUE1); \
+        const char* _arg_value_ptrs[] = {_arg_values[0], _arg_values[1]}; \
+        log_jni_call_json(FUNC_NAME, _arg_names, _arg_value_ptrs, 2); \
+    } while (0)
+
+#define LOG_SIMPLE_JSON_PTR1(FUNC_NAME, ENV_PTR, NAME1, VALUE1) \
+    do { \
+        const char* _arg_names[] = {"env", NAME1}; \
+        char _arg_values[2][256]; \
+        snprintf(_arg_values[0], sizeof(_arg_values[0]), "%p", (void*)(ENV_PTR)); \
+        snprintf(_arg_values[1], sizeof(_arg_values[1]), "%p", (void*)(VALUE1)); \
+        const char* _arg_value_ptrs[] = {_arg_values[0], _arg_values[1]}; \
+        log_jni_call_json(FUNC_NAME, _arg_names, _arg_value_ptrs, 2); \
+    } while (0)
+
 /* ============================================
  * VERSION INFORMATION
  * ============================================ */
@@ -417,6 +544,7 @@ static jobject JNICALL fake_ToReflectedField(JNIEnv* env, jclass clazz, jfieldID
 
 static jint JNICALL fake_Throw(JNIEnv* env, jthrowable obj) {
     LOG_CALL_1("Throw", "obj=%p", obj);
+    LOG_SIMPLE_JSON_PTR1("Throw", env, "obj", obj);
     increment_call_count("Throw");
     return JNI_OK;
 }
@@ -424,23 +552,34 @@ static jint JNICALL fake_Throw(JNIEnv* env, jthrowable obj) {
 static jint JNICALL fake_ThrowNew(JNIEnv* env, jclass clazz, const char* message) {
     const char* class_name = get_class_name(clazz);
     LOG_CALL_3("ThrowNew", "clazz=%p [%s], message=%s", clazz, class_name, message ? message : "NULL");
+    const char* arg_names[] = {"env", "clazz", "class_name", "message"};
+    char arg_values[4][256];
+    snprintf(arg_values[0], sizeof(arg_values[0]), "%p", (void*)env);
+    snprintf(arg_values[1], sizeof(arg_values[1]), "%p", (void*)clazz);
+    snprintf(arg_values[2], sizeof(arg_values[2]), "%s", class_name);
+    snprintf(arg_values[3], sizeof(arg_values[3]), "%s", message ? message : "NULL");
+    const char* arg_value_ptrs[] = {arg_values[0], arg_values[1], arg_values[2], arg_values[3]};
+    log_jni_call_json("ThrowNew", arg_names, arg_value_ptrs, 4);
     increment_call_count("ThrowNew");
     return JNI_OK;
 }
 
 static jthrowable JNICALL fake_ExceptionOccurred(JNIEnv* env) {
     LOG_CALL_START("ExceptionOccurred");
+    LOG_SIMPLE_JSON_1("ExceptionOccurred", env, "return_value", "NULL");
     increment_call_count("ExceptionOccurred");
     return NULL;
 }
 
 static void JNICALL fake_ExceptionDescribe(JNIEnv* env) {
     LOG_CALL_START("ExceptionDescribe");
+    LOG_SIMPLE_JSON_1("ExceptionDescribe", env, "status", "called");
     increment_call_count("ExceptionDescribe");
 }
 
 static void JNICALL fake_ExceptionClear(JNIEnv* env) {
     LOG_CALL_START("ExceptionClear");
+    LOG_SIMPLE_JSON_1("ExceptionClear", env, "status", "called");
     increment_call_count("ExceptionClear");
 }
 
@@ -458,12 +597,16 @@ static void JNICALL fake_FatalError(JNIEnv* env, const char* msg) {
 
 static jint JNICALL fake_PushLocalFrame(JNIEnv* env, jint capacity) {
     LOG_CALL_1("PushLocalFrame", "capacity=%d", capacity);
+    char capacity_text[32];
+    snprintf(capacity_text, sizeof(capacity_text), "%d", capacity);
+    LOG_SIMPLE_JSON_1("PushLocalFrame", env, "capacity", capacity_text);
     increment_call_count("PushLocalFrame");
     return JNI_OK;
 }
 
 static jobject JNICALL fake_PopLocalFrame(JNIEnv* env, jobject result) {
     LOG_CALL_1("PopLocalFrame", "result=%p", result);
+    LOG_SIMPLE_JSON_PTR1("PopLocalFrame", env, "result", result);
     increment_call_count("PopLocalFrame");
     return result;
 }
@@ -497,23 +640,36 @@ static void JNICALL fake_DeleteGlobalRef(JNIEnv* env, jobject globalRef) {
 
 static void JNICALL fake_DeleteLocalRef(JNIEnv* env, jobject localRef) {
     LOG_CALL_1("DeleteLocalRef", "localRef=%p", localRef);
+    LOG_SIMPLE_JSON_PTR1("DeleteLocalRef", env, "localRef", localRef);
     increment_call_count("DeleteLocalRef");
 }
 
 static jboolean JNICALL fake_IsSameObject(JNIEnv* env, jobject ref1, jobject ref2) {
     LOG_CALL_2("IsSameObject", "ref1=%p, ref2=%p", ref1, ref2);
+    const char* arg_names[] = {"env", "ref1", "ref2", "return_value"};
+    char arg_values[4][64];
+    snprintf(arg_values[0], sizeof(arg_values[0]), "%p", (void*)env);
+    snprintf(arg_values[1], sizeof(arg_values[1]), "%p", (void*)ref1);
+    snprintf(arg_values[2], sizeof(arg_values[2]), "%p", (void*)ref2);
+    snprintf(arg_values[3], sizeof(arg_values[3]), "%s", (ref1 == ref2) ? "true" : "false");
+    const char* arg_value_ptrs[] = {arg_values[0], arg_values[1], arg_values[2], arg_values[3]};
+    log_jni_call_json("IsSameObject", arg_names, arg_value_ptrs, 4);
     increment_call_count("IsSameObject");
     return (ref1 == ref2) ? JNI_TRUE : JNI_FALSE;
 }
 
 static jobject JNICALL fake_NewLocalRef(JNIEnv* env, jobject ref) {
     LOG_CALL_1("NewLocalRef", "ref=%p", ref);
+    LOG_SIMPLE_JSON_PTR1("NewLocalRef", env, "ref", ref);
     increment_call_count("NewLocalRef");
     return ref;
 }
 
 static jint JNICALL fake_EnsureLocalCapacity(JNIEnv* env, jint capacity) {
     LOG_CALL_1("EnsureLocalCapacity", "capacity=%d", capacity);
+    char capacity_text[32];
+    snprintf(capacity_text, sizeof(capacity_text), "%d", capacity);
+    LOG_SIMPLE_JSON_1("EnsureLocalCapacity", env, "capacity", capacity_text);
     increment_call_count("EnsureLocalCapacity");
     return JNI_OK;
 }
@@ -601,37 +757,44 @@ static jmethodID JNICALL fake_GetMethodID(JNIEnv* env, jclass clazz, const char*
 /* Continue with Call*Method functions */
 #define DEFINE_CALL_METHOD(Type, type) \
 static j##type JNICALL fake_Call##Type##Method(JNIEnv* env, jobject obj, jmethodID methodID, ...) { \
-    (void)env; \
     MethodEntry* _me = method_table_find(methodID); \
+    jlong _mv = 0; \
+    int _mock_applied = 0; \
     if (_me) { \
         log_jni_call("Call" #Type "Method", "obj=%p, %s.%s%s", \
                      obj, _me->class_name, _me->method_name, _me->signature); \
-        jlong _mv = 0; \
         if (mock_get_primitive(_me->class_name, _me->method_name, _me->signature, &_mv)) { \
+            _mock_applied = 1; \
             log_info("  [MOCK] Call" #Type "Method %s.%s%s => %lld", \
                      _me->class_name, _me->method_name, _me->signature, (long long)_mv); \
+            char _return_value[64]; \
+            snprintf(_return_value, sizeof(_return_value), "%lld", (long long)_mv); \
+            LOG_METHOD_CALL_JSON("Call" #Type "Method", env, "obj", obj, methodID, _me, "false", #type, _return_value, "true"); \
             increment_call_count("Call" #Type "Method"); \
             return (j##type)_mv; \
         } \
     } else { \
         log_jni_call("Call" #Type "Method", "obj=%p, methodID=%p (unresolved)", obj, methodID); \
     } \
+    LOG_METHOD_CALL_JSON("Call" #Type "Method", env, "obj", obj, methodID, _me, "false", #type, "0", _mock_applied ? "true" : "false"); \
     increment_call_count("Call" #Type "Method"); \
     return (j##type)0; \
 } \
 static j##type JNICALL fake_Call##Type##MethodV(JNIEnv* env, jobject obj, jmethodID methodID, va_list args) { \
-    (void)env; (void)args; \
+    (void)args; \
     MethodEntry* _me = method_table_find(methodID); \
     if (_me) { log_jni_call("Call" #Type "MethodV", "obj=%p, %s.%s%s", obj, _me->class_name, _me->method_name, _me->signature); } \
     else      { log_jni_call("Call" #Type "MethodV", "obj=%p, methodID=%p (unresolved)", obj, methodID); } \
+    LOG_METHOD_CALL_JSON("Call" #Type "MethodV", env, "obj", obj, methodID, _me, "false", #type, "0", "false"); \
     increment_call_count("Call" #Type "MethodV"); \
     return (j##type)0; \
 } \
 static j##type JNICALL fake_Call##Type##MethodA(JNIEnv* env, jobject obj, jmethodID methodID, const jvalue* args) { \
-    (void)env; (void)args; \
+    (void)args; \
     MethodEntry* _me = method_table_find(methodID); \
     if (_me) { log_jni_call("Call" #Type "MethodA", "obj=%p, %s.%s%s", obj, _me->class_name, _me->method_name, _me->signature); } \
     else      { log_jni_call("Call" #Type "MethodA", "obj=%p, methodID=%p (unresolved)", obj, methodID); } \
+    LOG_METHOD_CALL_JSON("Call" #Type "MethodA", env, "obj", obj, methodID, _me, "false", #type, "0", "false"); \
     increment_call_count("Call" #Type "MethodA"); \
     return (j##type)0; \
 }
@@ -654,28 +817,34 @@ static jobject JNICALL fake_CallObjectMethod(JNIEnv* env, jobject obj, jmethodID
         if (mock_get_string(me->class_name, me->method_name, me->signature, mock_str, sizeof(mock_str))) {
             log_info("  [MOCK] CallObjectMethod %s.%s%s => \"%s\"",
                      me->class_name, me->method_name, me->signature, mock_str);
+            LOG_METHOD_CALL_JSON("CallObjectMethod", env, "obj", obj, methodID, me, "false", "string", mock_str, "true");
             increment_call_count("CallObjectMethod");
             return (jobject)pool_intern_utf8(mock_str);
         }
     } else {
         log_jni_call("CallObjectMethod", "obj=%p, methodID=%p (unresolved)", obj, methodID);
     }
+    LOG_METHOD_CALL_JSON("CallObjectMethod", env, "obj", obj, methodID, me, "false", "object", "0x5004", "false");
     increment_call_count("CallObjectMethod");
     return (jobject)0x5004;
 }
 
 static jobject JNICALL fake_CallObjectMethodV(JNIEnv* env, jobject obj, jmethodID methodID, va_list args) {
+    (void)args;
     MethodEntry* me = method_table_find(methodID);
     if (me) { log_jni_call("CallObjectMethodV", "obj=%p, %s.%s%s", obj, me->class_name, me->method_name, me->signature); }
     else     { log_jni_call("CallObjectMethodV", "obj=%p, methodID=%p (unresolved)", obj, methodID); }
+    LOG_METHOD_CALL_JSON("CallObjectMethodV", env, "obj", obj, methodID, me, "false", "object", "0x5005", "false");
     increment_call_count("CallObjectMethodV");
     return (jobject)0x5005;
 }
 
 static jobject JNICALL fake_CallObjectMethodA(JNIEnv* env, jobject obj, jmethodID methodID, const jvalue* args) {
+    (void)args;
     MethodEntry* me = method_table_find(methodID);
     if (me) { log_jni_call("CallObjectMethodA", "obj=%p, %s.%s%s", obj, me->class_name, me->method_name, me->signature); }
     else     { log_jni_call("CallObjectMethodA", "obj=%p, methodID=%p (unresolved)", obj, methodID); }
+    LOG_METHOD_CALL_JSON("CallObjectMethodA", env, "obj", obj, methodID, me, "false", "object", "0x5006", "false");
     increment_call_count("CallObjectMethodA");
     return (jobject)0x5006;
 }
@@ -684,37 +853,53 @@ static void JNICALL fake_CallVoidMethod(JNIEnv* env, jobject obj, jmethodID meth
     MethodEntry* me = method_table_find(methodID);
     if (me) { log_jni_call("CallVoidMethod", "obj=%p, %s.%s%s", obj, me->class_name, me->method_name, me->signature); }
     else     { log_jni_call("CallVoidMethod", "obj=%p, methodID=%p (unresolved)", obj, methodID); }
+    LOG_METHOD_CALL_JSON("CallVoidMethod", env, "obj", obj, methodID, me, "false", "void", "void", "false");
     increment_call_count("CallVoidMethod");
 }
 
 static void JNICALL fake_CallVoidMethodV(JNIEnv* env, jobject obj, jmethodID methodID, va_list args) {
+    (void)args;
     MethodEntry* me = method_table_find(methodID);
     if (me) { log_jni_call("CallVoidMethodV", "obj=%p, %s.%s%s", obj, me->class_name, me->method_name, me->signature); }
     else     { log_jni_call("CallVoidMethodV", "obj=%p, methodID=%p (unresolved)", obj, methodID); }
+    LOG_METHOD_CALL_JSON("CallVoidMethodV", env, "obj", obj, methodID, me, "false", "void", "void", "false");
     increment_call_count("CallVoidMethodV");
 }
 
 static void JNICALL fake_CallVoidMethodA(JNIEnv* env, jobject obj, jmethodID methodID, const jvalue* args) {
+    (void)args;
     MethodEntry* me = method_table_find(methodID);
     if (me) { log_jni_call("CallVoidMethodA", "obj=%p, %s.%s%s", obj, me->class_name, me->method_name, me->signature); }
     else     { log_jni_call("CallVoidMethodA", "obj=%p, methodID=%p (unresolved)", obj, methodID); }
+    LOG_METHOD_CALL_JSON("CallVoidMethodA", env, "obj", obj, methodID, me, "false", "void", "void", "false");
     increment_call_count("CallVoidMethodA");
 }
 
 /* CallNonvirtual*Method functions */
 #define DEFINE_CALL_NONVIRTUAL_METHOD(Type, type) \
 static j##type JNICALL fake_CallNonvirtual##Type##Method(JNIEnv* env, jobject obj, jclass clazz, jmethodID methodID, ...) { \
-    LOG_CALL_3("CallNonvirtual" #Type "Method", "obj=%p, clazz=%p, methodID=%p", obj, clazz, methodID); \
+    MethodEntry* _me = method_table_find(methodID); \
+    if (_me) { log_jni_call("CallNonvirtual" #Type "Method", "obj=%p, clazz=%p, %s.%s%s", obj, clazz, _me->class_name, _me->method_name, _me->signature); } \
+    else     { log_jni_call("CallNonvirtual" #Type "Method", "obj=%p, clazz=%p, methodID=%p (unresolved)", obj, clazz, methodID); } \
+    LOG_METHOD_CALL_JSON("CallNonvirtual" #Type "Method", env, "obj", obj, methodID, _me, "false", #type, "0", "false"); \
     increment_call_count("CallNonvirtual" #Type "Method"); \
     return (j##type)0; \
 } \
 static j##type JNICALL fake_CallNonvirtual##Type##MethodV(JNIEnv* env, jobject obj, jclass clazz, jmethodID methodID, va_list args) { \
-    LOG_CALL_3("CallNonvirtual" #Type "MethodV", "obj=%p, clazz=%p, methodID=%p", obj, clazz, methodID); \
+    (void)args; \
+    MethodEntry* _me = method_table_find(methodID); \
+    if (_me) { log_jni_call("CallNonvirtual" #Type "MethodV", "obj=%p, clazz=%p, %s.%s%s", obj, clazz, _me->class_name, _me->method_name, _me->signature); } \
+    else     { log_jni_call("CallNonvirtual" #Type "MethodV", "obj=%p, clazz=%p, methodID=%p (unresolved)", obj, clazz, methodID); } \
+    LOG_METHOD_CALL_JSON("CallNonvirtual" #Type "MethodV", env, "obj", obj, methodID, _me, "false", #type, "0", "false"); \
     increment_call_count("CallNonvirtual" #Type "MethodV"); \
     return (j##type)0; \
 } \
 static j##type JNICALL fake_CallNonvirtual##Type##MethodA(JNIEnv* env, jobject obj, jclass clazz, jmethodID methodID, const jvalue* args) { \
-    LOG_CALL_3("CallNonvirtual" #Type "MethodA", "obj=%p, clazz=%p, methodID=%p", obj, clazz, methodID); \
+    (void)args; \
+    MethodEntry* _me = method_table_find(methodID); \
+    if (_me) { log_jni_call("CallNonvirtual" #Type "MethodA", "obj=%p, clazz=%p, %s.%s%s", obj, clazz, _me->class_name, _me->method_name, _me->signature); } \
+    else     { log_jni_call("CallNonvirtual" #Type "MethodA", "obj=%p, clazz=%p, methodID=%p (unresolved)", obj, clazz, methodID); } \
+    LOG_METHOD_CALL_JSON("CallNonvirtual" #Type "MethodA", env, "obj", obj, methodID, _me, "false", #type, "0", "false"); \
     increment_call_count("CallNonvirtual" #Type "MethodA"); \
     return (j##type)0; \
 }
@@ -729,19 +914,30 @@ DEFINE_CALL_NONVIRTUAL_METHOD(Float, float)
 DEFINE_CALL_NONVIRTUAL_METHOD(Double, double)
 
 static jobject JNICALL fake_CallNonvirtualObjectMethod(JNIEnv* env, jobject obj, jclass clazz, jmethodID methodID, ...) {
-    LOG_CALL_3("CallNonvirtualObjectMethod", "obj=%p, clazz=%p, methodID=%p", obj, clazz, methodID);
+    MethodEntry* me = method_table_find(methodID);
+    if (me) { log_jni_call("CallNonvirtualObjectMethod", "obj=%p, clazz=%p, %s.%s%s", obj, clazz, me->class_name, me->method_name, me->signature); }
+    else    { log_jni_call("CallNonvirtualObjectMethod", "obj=%p, clazz=%p, methodID=%p (unresolved)", obj, clazz, methodID); }
+    LOG_METHOD_CALL_JSON("CallNonvirtualObjectMethod", env, "obj", obj, methodID, me, "false", "object", "0x5007", "false");
     increment_call_count("CallNonvirtualObjectMethod");
     return (jobject)0x5007;
 }
 
 static jobject JNICALL fake_CallNonvirtualObjectMethodV(JNIEnv* env, jobject obj, jclass clazz, jmethodID methodID, va_list args) {
-    LOG_CALL_3("CallNonvirtualObjectMethodV", "obj=%p, clazz=%p, methodID=%p", obj, clazz, methodID);
+    (void)args;
+    MethodEntry* me = method_table_find(methodID);
+    if (me) { log_jni_call("CallNonvirtualObjectMethodV", "obj=%p, clazz=%p, %s.%s%s", obj, clazz, me->class_name, me->method_name, me->signature); }
+    else    { log_jni_call("CallNonvirtualObjectMethodV", "obj=%p, clazz=%p, methodID=%p (unresolved)", obj, clazz, methodID); }
+    LOG_METHOD_CALL_JSON("CallNonvirtualObjectMethodV", env, "obj", obj, methodID, me, "false", "object", "0x5008", "false");
     increment_call_count("CallNonvirtualObjectMethodV");
     return (jobject)0x5008;
 }
 
 static jobject JNICALL fake_CallNonvirtualObjectMethodA(JNIEnv* env, jobject obj, jclass clazz, jmethodID methodID, const jvalue* args) {
-    LOG_CALL_3("CallNonvirtualObjectMethodA", "obj=%p, clazz=%p, methodID=%p", obj, clazz, methodID);
+    (void)args;
+    MethodEntry* me = method_table_find(methodID);
+    if (me) { log_jni_call("CallNonvirtualObjectMethodA", "obj=%p, clazz=%p, %s.%s%s", obj, clazz, me->class_name, me->method_name, me->signature); }
+    else    { log_jni_call("CallNonvirtualObjectMethodA", "obj=%p, clazz=%p, methodID=%p (unresolved)", obj, clazz, methodID); }
+    LOG_METHOD_CALL_JSON("CallNonvirtualObjectMethodA", env, "obj", obj, methodID, me, "false", "object", "0x5009", "false");
     increment_call_count("CallNonvirtualObjectMethodA");
     return (jobject)0x5009;
 }
@@ -750,20 +946,25 @@ static void JNICALL fake_CallNonvirtualVoidMethod(JNIEnv* env, jobject obj, jcla
     MethodEntry* me = method_table_find(methodID);
     if (me) { log_jni_call("CallNonvirtualVoidMethod", "obj=%p, clazz=%p, %s.%s%s", obj, clazz, me->class_name, me->method_name, me->signature); }
     else     { log_jni_call("CallNonvirtualVoidMethod", "obj=%p, clazz=%p, methodID=%p (unresolved)", obj, clazz, methodID); }
+    LOG_METHOD_CALL_JSON("CallNonvirtualVoidMethod", env, "obj", obj, methodID, me, "false", "void", "void", "false");
     increment_call_count("CallNonvirtualVoidMethod");
 }
 
 static void JNICALL fake_CallNonvirtualVoidMethodV(JNIEnv* env, jobject obj, jclass clazz, jmethodID methodID, va_list args) {
+    (void)args;
     MethodEntry* me = method_table_find(methodID);
     if (me) { log_jni_call("CallNonvirtualVoidMethodV", "obj=%p, clazz=%p, %s.%s%s", obj, clazz, me->class_name, me->method_name, me->signature); }
     else     { log_jni_call("CallNonvirtualVoidMethodV", "obj=%p, clazz=%p, methodID=%p (unresolved)", obj, clazz, methodID); }
+    LOG_METHOD_CALL_JSON("CallNonvirtualVoidMethodV", env, "obj", obj, methodID, me, "false", "void", "void", "false");
     increment_call_count("CallNonvirtualVoidMethodV");
 }
 
 static void JNICALL fake_CallNonvirtualVoidMethodA(JNIEnv* env, jobject obj, jclass clazz, jmethodID methodID, const jvalue* args) {
+    (void)args;
     MethodEntry* me = method_table_find(methodID);
     if (me) { log_jni_call("CallNonvirtualVoidMethodA", "obj=%p, clazz=%p, %s.%s%s", obj, clazz, me->class_name, me->method_name, me->signature); }
     else     { log_jni_call("CallNonvirtualVoidMethodA", "obj=%p, clazz=%p, methodID=%p (unresolved)", obj, clazz, methodID); }
+    LOG_METHOD_CALL_JSON("CallNonvirtualVoidMethodA", env, "obj", obj, methodID, me, "false", "void", "void", "false");
     increment_call_count("CallNonvirtualVoidMethodA");
 }
 
@@ -874,37 +1075,44 @@ static jmethodID JNICALL fake_GetStaticMethodID(JNIEnv* env, jclass clazz, const
 /* CallStatic*Method functions */
 #define DEFINE_CALL_STATIC_METHOD(Type, type) \
 static j##type JNICALL fake_CallStatic##Type##Method(JNIEnv* env, jclass clazz, jmethodID methodID, ...) { \
-    (void)env; \
     MethodEntry* _me = method_table_find(methodID); \
+    jlong _mv = 0; \
+    int _mock_applied = 0; \
     if (_me) { \
         log_jni_call("CallStatic" #Type "Method", "clazz=%p, %s.%s%s", \
                      clazz, _me->class_name, _me->method_name, _me->signature); \
-        jlong _mv = 0; \
         if (mock_get_primitive(_me->class_name, _me->method_name, _me->signature, &_mv)) { \
+            _mock_applied = 1; \
             log_info("  [MOCK] CallStatic" #Type "Method %s.%s%s => %lld", \
                      _me->class_name, _me->method_name, _me->signature, (long long)_mv); \
+            char _return_value[64]; \
+            snprintf(_return_value, sizeof(_return_value), "%lld", (long long)_mv); \
+            LOG_METHOD_CALL_JSON("CallStatic" #Type "Method", env, "clazz", clazz, methodID, _me, "true", #type, _return_value, "true"); \
             increment_call_count("CallStatic" #Type "Method"); \
             return (j##type)_mv; \
         } \
     } else { \
         log_jni_call("CallStatic" #Type "Method", "clazz=%p, methodID=%p (unresolved)", clazz, methodID); \
     } \
+    LOG_METHOD_CALL_JSON("CallStatic" #Type "Method", env, "clazz", clazz, methodID, _me, "true", #type, "0", _mock_applied ? "true" : "false"); \
     increment_call_count("CallStatic" #Type "Method"); \
     return (j##type)0; \
 } \
 static j##type JNICALL fake_CallStatic##Type##MethodV(JNIEnv* env, jclass clazz, jmethodID methodID, va_list args) { \
-    (void)env; (void)args; \
+    (void)args; \
     MethodEntry* _me = method_table_find(methodID); \
     if (_me) { log_jni_call("CallStatic" #Type "MethodV", "clazz=%p, %s.%s%s", clazz, _me->class_name, _me->method_name, _me->signature); } \
     else      { log_jni_call("CallStatic" #Type "MethodV", "clazz=%p, methodID=%p (unresolved)", clazz, methodID); } \
+    LOG_METHOD_CALL_JSON("CallStatic" #Type "MethodV", env, "clazz", clazz, methodID, _me, "true", #type, "0", "false"); \
     increment_call_count("CallStatic" #Type "MethodV"); \
     return (j##type)0; \
 } \
 static j##type JNICALL fake_CallStatic##Type##MethodA(JNIEnv* env, jclass clazz, jmethodID methodID, const jvalue* args) { \
-    (void)env; (void)args; \
+    (void)args; \
     MethodEntry* _me = method_table_find(methodID); \
     if (_me) { log_jni_call("CallStatic" #Type "MethodA", "clazz=%p, %s.%s%s", clazz, _me->class_name, _me->method_name, _me->signature); } \
     else      { log_jni_call("CallStatic" #Type "MethodA", "clazz=%p, methodID=%p (unresolved)", clazz, methodID); } \
+    LOG_METHOD_CALL_JSON("CallStatic" #Type "MethodA", env, "clazz", clazz, methodID, _me, "true", #type, "0", "false"); \
     increment_call_count("CallStatic" #Type "MethodA"); \
     return (j##type)0; \
 }
@@ -927,28 +1135,34 @@ static jobject JNICALL fake_CallStaticObjectMethod(JNIEnv* env, jclass clazz, jm
         if (mock_get_string(me->class_name, me->method_name, me->signature, mock_str, sizeof(mock_str))) {
             log_info("  [MOCK] CallStaticObjectMethod %s.%s%s => \"%s\"",
                      me->class_name, me->method_name, me->signature, mock_str);
+            LOG_METHOD_CALL_JSON("CallStaticObjectMethod", env, "clazz", clazz, methodID, me, "true", "string", mock_str, "true");
             increment_call_count("CallStaticObjectMethod");
             return (jobject)pool_intern_utf8(mock_str);
         }
     } else {
         log_jni_call("CallStaticObjectMethod", "clazz=%p, methodID=%p (unresolved)", clazz, methodID);
     }
+    LOG_METHOD_CALL_JSON("CallStaticObjectMethod", env, "clazz", clazz, methodID, me, "true", "object", "0x5011", "false");
     increment_call_count("CallStaticObjectMethod");
     return (jobject)0x5011;
 }
 
 static jobject JNICALL fake_CallStaticObjectMethodV(JNIEnv* env, jclass clazz, jmethodID methodID, va_list args) {
+    (void)args;
     MethodEntry* me = method_table_find(methodID);
     if (me) { log_jni_call("CallStaticObjectMethodV", "clazz=%p, %s.%s%s", clazz, me->class_name, me->method_name, me->signature); }
     else     { log_jni_call("CallStaticObjectMethodV", "clazz=%p, methodID=%p (unresolved)", clazz, methodID); }
+    LOG_METHOD_CALL_JSON("CallStaticObjectMethodV", env, "clazz", clazz, methodID, me, "true", "object", "0x5012", "false");
     increment_call_count("CallStaticObjectMethodV");
     return (jobject)0x5012;
 }
 
 static jobject JNICALL fake_CallStaticObjectMethodA(JNIEnv* env, jclass clazz, jmethodID methodID, const jvalue* args) {
+    (void)args;
     MethodEntry* me = method_table_find(methodID);
     if (me) { log_jni_call("CallStaticObjectMethodA", "clazz=%p, %s.%s%s", clazz, me->class_name, me->method_name, me->signature); }
     else     { log_jni_call("CallStaticObjectMethodA", "clazz=%p, methodID=%p (unresolved)", clazz, methodID); }
+    LOG_METHOD_CALL_JSON("CallStaticObjectMethodA", env, "clazz", clazz, methodID, me, "true", "object", "0x5013", "false");
     increment_call_count("CallStaticObjectMethodA");
     return (jobject)0x5013;
 }
@@ -957,20 +1171,25 @@ static void JNICALL fake_CallStaticVoidMethod(JNIEnv* env, jclass clazz, jmethod
     MethodEntry* me = method_table_find(methodID);
     if (me) { log_jni_call("CallStaticVoidMethod", "clazz=%p, %s.%s%s", clazz, me->class_name, me->method_name, me->signature); }
     else     { log_jni_call("CallStaticVoidMethod", "clazz=%p, methodID=%p (unresolved)", clazz, methodID); }
+    LOG_METHOD_CALL_JSON("CallStaticVoidMethod", env, "clazz", clazz, methodID, me, "true", "void", "void", "false");
     increment_call_count("CallStaticVoidMethod");
 }
 
 static void JNICALL fake_CallStaticVoidMethodV(JNIEnv* env, jclass clazz, jmethodID methodID, va_list args) {
+    (void)args;
     MethodEntry* me = method_table_find(methodID);
     if (me) { log_jni_call("CallStaticVoidMethodV", "clazz=%p, %s.%s%s", clazz, me->class_name, me->method_name, me->signature); }
     else     { log_jni_call("CallStaticVoidMethodV", "clazz=%p, methodID=%p (unresolved)", clazz, methodID); }
+    LOG_METHOD_CALL_JSON("CallStaticVoidMethodV", env, "clazz", clazz, methodID, me, "true", "void", "void", "false");
     increment_call_count("CallStaticVoidMethodV");
 }
 
 static void JNICALL fake_CallStaticVoidMethodA(JNIEnv* env, jclass clazz, jmethodID methodID, const jvalue* args) {
+    (void)args;
     MethodEntry* me = method_table_find(methodID);
     if (me) { log_jni_call("CallStaticVoidMethodA", "clazz=%p, %s.%s%s", clazz, me->class_name, me->method_name, me->signature); }
     else     { log_jni_call("CallStaticVoidMethodA", "clazz=%p, methodID=%p (unresolved)", clazz, methodID); }
+    LOG_METHOD_CALL_JSON("CallStaticVoidMethodA", env, "clazz", clazz, methodID, me, "true", "void", "void", "false");
     increment_call_count("CallStaticVoidMethodA");
 }
 
@@ -1071,6 +1290,13 @@ static jsize JNICALL fake_GetStringLength(JNIEnv* env, jstring string) {
     StringEntry* e = pool_find(string);
     jsize len = e ? e->utf16_len : 0;
     LOG_CALL_2("GetStringLength", "string=%p, len=%d", string, len);
+    const char* arg_names[] = {"env", "string", "len"};
+    char arg_values[3][64];
+    snprintf(arg_values[0], sizeof(arg_values[0]), "%p", (void*)env);
+    snprintf(arg_values[1], sizeof(arg_values[1]), "%p", (void*)string);
+    snprintf(arg_values[2], sizeof(arg_values[2]), "%d", len);
+    const char* arg_value_ptrs[] = {arg_values[0], arg_values[1], arg_values[2]};
+    log_jni_call_json("GetStringLength", arg_names, arg_value_ptrs, 3);
     increment_call_count("GetStringLength");
     return len;
 }
@@ -1079,6 +1305,13 @@ static const jchar* JNICALL fake_GetStringChars(JNIEnv* env, jstring string, jbo
     StringEntry* e = pool_find(string);
     LOG_CALL_2("GetStringChars", "string=%p, utf8=\"%s\"",
                string, e ? e->utf8 : "(not in pool)");
+    const char* arg_names[] = {"env", "string", "value"};
+    char arg_values[3][256];
+    snprintf(arg_values[0], sizeof(arg_values[0]), "%p", (void*)env);
+    snprintf(arg_values[1], sizeof(arg_values[1]), "%p", (void*)string);
+    snprintf(arg_values[2], sizeof(arg_values[2]), "%s", e ? e->utf8 : "");
+    const char* arg_value_ptrs[] = {arg_values[0], arg_values[1], arg_values[2]};
+    log_jni_call_json("GetStringChars", arg_names, arg_value_ptrs, 3);
     increment_call_count("GetStringChars");
     if (isCopy) *isCopy = JNI_FALSE;
     return e ? e->utf16 : NULL;
@@ -1086,6 +1319,13 @@ static const jchar* JNICALL fake_GetStringChars(JNIEnv* env, jstring string, jbo
 
 static void JNICALL fake_ReleaseStringChars(JNIEnv* env, jstring string, const jchar* chars) {
     LOG_CALL_2("ReleaseStringChars", "string=%p, chars=%p", string, chars);
+    const char* arg_names[] = {"env", "string", "chars"};
+    char arg_values[3][64];
+    snprintf(arg_values[0], sizeof(arg_values[0]), "%p", (void*)env);
+    snprintf(arg_values[1], sizeof(arg_values[1]), "%p", (void*)string);
+    snprintf(arg_values[2], sizeof(arg_values[2]), "%p", (void*)chars);
+    const char* arg_value_ptrs[] = {arg_values[0], arg_values[1], arg_values[2]};
+    log_jni_call_json("ReleaseStringChars", arg_names, arg_value_ptrs, 3);
     increment_call_count("ReleaseStringChars");
     /* Pool owns the UTF-16 buffer — nothing to free */
 }
@@ -1112,6 +1352,13 @@ static jsize JNICALL fake_GetStringUTFLength(JNIEnv* env, jstring string) {
     StringEntry* e = pool_find(string);
     jsize len = e ? e->utf8_len : 0;
     LOG_CALL_2("GetStringUTFLength", "string=%p, len=%d", string, len);
+    const char* arg_names[] = {"env", "string", "len"};
+    char arg_values[3][64];
+    snprintf(arg_values[0], sizeof(arg_values[0]), "%p", (void*)env);
+    snprintf(arg_values[1], sizeof(arg_values[1]), "%p", (void*)string);
+    snprintf(arg_values[2], sizeof(arg_values[2]), "%d", len);
+    const char* arg_value_ptrs[] = {arg_values[0], arg_values[1], arg_values[2]};
+    log_jni_call_json("GetStringUTFLength", arg_names, arg_value_ptrs, 3);
     increment_call_count("GetStringUTFLength");
     return len;
 }
@@ -1138,6 +1385,13 @@ static const char* JNICALL fake_GetStringUTFChars(JNIEnv* env, jstring string, j
 static void JNICALL fake_ReleaseStringUTFChars(JNIEnv* env, jstring string, const char* utf) {
     LOG_CALL_2("ReleaseStringUTFChars", "string=%p, utf=\"%s\"",
                string, utf ? utf : "NULL");
+    const char* arg_names[] = {"env", "string", "utf"};
+    char arg_values[3][256];
+    snprintf(arg_values[0], sizeof(arg_values[0]), "%p", (void*)env);
+    snprintf(arg_values[1], sizeof(arg_values[1]), "%p", (void*)string);
+    snprintf(arg_values[2], sizeof(arg_values[2]), "%s", utf ? utf : "NULL");
+    const char* arg_value_ptrs[] = {arg_values[0], arg_values[1], arg_values[2]};
+    log_jni_call_json("ReleaseStringUTFChars", arg_names, arg_value_ptrs, 3);
     increment_call_count("ReleaseStringUTFChars");
     /* Pool owns the UTF-8 buffer — nothing to free */
 }
@@ -1284,6 +1538,10 @@ static jint JNICALL fake_RegisterNatives(JNIEnv* env, jclass clazz, const JNINat
     /* Log each method to text log */
     if (methods && nMethods > 0) {
         for (jint i = 0; i < nMethods; i++) {
+            native_registry_register(class_name,
+                                     methods[i].name,
+                                     methods[i].signature,
+                                     methods[i].fnPtr);
             log_info("  [%d] name=%s, signature=%s, fnPtr=%p",
                      i,
                      methods[i].name ? methods[i].name : "NULL",
@@ -1453,6 +1711,7 @@ static void JNICALL fake_DeleteWeakGlobalRef(JNIEnv* env, jweak obj) {
 
 static jboolean JNICALL fake_ExceptionCheck(JNIEnv* env) {
     LOG_CALL_START("ExceptionCheck");
+    LOG_SIMPLE_JSON_1("ExceptionCheck", env, "return_value", "false");
     increment_call_count("ExceptionCheck");
     return JNI_FALSE;
 }

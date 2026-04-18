@@ -62,6 +62,13 @@ adb shell "cd /data/local/tmp && LD_LIBRARY_PATH=. ./jni_harness_arm64_android .
 # Mock 설정 주입 (리턴값 조작)
 adb push mock.json /data/local/tmp/
 adb shell "cd /data/local/tmp && LD_LIBRARY_PATH=. ./jni_harness_arm64_android --mock mock.json ./libtarget.so"
+
+# RegisterNatives entry 직접 호출
+adb shell "cd /data/local/tmp && LD_LIBRARY_PATH=. ./jni_harness_arm64_android ./libtarget.so --invoke 'com/example/app/NativeBridge.processEvent(IILjava/lang/String;)Ljava/lang/String;' --arg int:1 --arg int:2 --arg string:test"
+
+# 여러 entry를 순서대로 호출
+adb push docs/generic_invoke_plan_example.json.example /data/local/tmp/invoke_plan.json
+adb shell "cd /data/local/tmp && LD_LIBRARY_PATH=. ./jni_harness_arm64_android ./libtarget.so --invoke-plan invoke_plan.json"
 ```
 
 ### 3단계: 로그 다운로드 및 분석
@@ -105,6 +112,7 @@ cat logs\jni_hook.json | jq .
 - **[PROJECT_SPECIFICATION.md](./PROJECT_SPECIFICATION.md)** - 완전한 개발 명세서 (AI 개발자용)
 - **[JSON_ANALYSIS_GUIDE.md](./JSON_ANALYSIS_GUIDE.md)** - JSON 로그 분석 방법
 - **[docs/mock_config.md](./docs/mock_config.md)** - Mock 설정 파일 사용법 (리턴값 주입)
+- **[docs/invoke_usage.md](./docs/invoke_usage.md)** - RegisterNatives entry 직접 호출 및 sequence 실행
 
 ## ✨ 주요 기능
 
@@ -112,6 +120,7 @@ cat logs\jni_hook.json | jq .
 - **실제 호출 모니터링**: `GetMethodID`로 조회된 메서드가 **실제로 호출됐는지** 추적 — `CallBooleanMethod(0x20010)` 대신 `CallBooleanMethod(com/security/RootChecker.isRooted()Z)` 형태로 기록
 - **String Pool**: `NewStringUTF` / `GetStringUTFChars` 등 문자열 생명주기 완전 추적 — 실제 문자열 내용을 저장하고 반환
 - **Mock 설정 파일** (`--mock`): JSON 설정으로 특정 Java 메서드의 리턴값을 런타임에 주입 → 루팅 탐지 우회, 분기 강제 진입 등에 활용 ([상세 문서](./docs/mock_config.md))
+- **Native invoke** (`--invoke`, `--invoke-plan`): `RegisterNatives`로 등록된 native 함수 포인터를 `JNI_OnLoad` 이후 직접 호출하여 초기화 이후 동작을 자극 ([상세 문서](./docs/invoke_usage.md))
 - **이중 로깅 시스템**:
   - 텍스트 로그: 실시간 모니터링용 가독성 높은 포맷
   - JSON 로그: 분석 도구 연동을 위한 구조화된 데이터 (caller offset 포함)
@@ -128,10 +137,11 @@ android-jni-tracer/
 ├── Makefile                  ← Linux/macOS 빌드
 ├── build-android.ps1         ← Windows용 Android NDK 빌드 스크립트
 ├── docs/
-│   └── mock_config.md        ← Mock 설정 파일 상세 문서
+│   ├── mock_config.md        ← Mock 설정 파일 상세 문서
+│   └── invoke_usage.md       ← Native invoke 사용법
 ├── src/
-│   ├── main.c               ← 메인 하네스 로더 (--mock 인수 지원)
-│   ├── fake_jni.c           ← 230+ JNI 함수 stub (MethodTable + StringPool 포함)
+│   ├── main.c               ← 메인 하네스 로더 (--mock/--invoke 인수 지원)
+│   ├── fake_jni.c           ← 230+ JNI 함수 stub (MethodTable + StringPool + NativeRegistry 포함)
 │   ├── jni_logger.c         ← 텍스트 로깅 시스템
 │   ├── json_logger.c        ← JSON 로깅 시스템
 │   ├── mock_config.c        ← Mock 설정 JSON 파서 및 조회 엔진
@@ -222,4 +232,3 @@ AI 개발자는 `PROJECT_SPECIFICATION.md`를 읽고 즉시 구현을 시작할 
 ## 📝 License
 
 이 프로젝트는 분석 및 연구 목적으로 제작되었습니다.
-

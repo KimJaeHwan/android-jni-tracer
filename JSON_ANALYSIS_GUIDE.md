@@ -35,9 +35,30 @@
         "name": "myMethod",
         "sig": "(I)V"
       }
+    },
+    {
+      "index": 2,
+      "function": "CallBooleanMethod",
+      "caller_address": "0x784f4c0d88",
+      "caller_offset": "0x10d88",
+      "caller_module": "libtarget.so",
+      "arguments": {
+        "env": "0x7ffc12345678",
+        "obj": "0x5001",
+        "methodID": "0x20000",
+        "resolved": "true",
+        "class_name": "com/example/MyClass",
+        "method_name": "isEnabled",
+        "sig": "()Z",
+        "resolved_method": "com/example/MyClass.isEnabled()Z",
+        "is_static": "false",
+        "return_type": "boolean",
+        "return_value": "0",
+        "mock_applied": "false"
+      }
     }
   ],
-  "total_calls": 2
+  "total_calls": 3
 }
 ```
 
@@ -55,7 +76,94 @@
   - **`caller_module`**: 호출한 .so 파일명
   - `arguments`: 함수 인자들 (key-value)
     - **`class_name`**: jclass에 대응하는 클래스 이름 (해당 함수만)
+    - **`resolved`**: `Call*Method`의 methodID가 method table에서 해석되었는지 여부
+    - **`method_name` / `sig`**: `GetMethodID` 또는 `GetStaticMethodID`에서 추적한 Java 메서드명과 JNI 시그니처
+    - **`resolved_method`**: `class_name.method_name(sig)` 형태의 호출 대상
+    - **`is_static`**: static method 호출 여부
+    - **`return_type` / `return_value`**: fake JNI stub이 반환한 타입과 값
+    - **`mock_applied`**: `--mock` 설정으로 리턴값이 주입되었는지 여부
 - `total_calls`: 전체 호출 횟수
+
+---
+
+## 🧩 Call*Method JSON 필드
+
+`CallObjectMethod`, `CallBooleanMethod`, `CallStaticObjectMethod`,
+`CallNonvirtualVoidMethod` 등 `Call*Method` 계열은 Java 메서드 호출의 실제 의미를 담는 핵심 이벤트입니다.
+
+이 계열은 가능한 경우 `GetMethodID` / `GetStaticMethodID`에서 생성된 method table을 통해 호출 대상을 해석합니다.
+
+### Resolved 호출
+
+```json
+{
+  "function": "CallBooleanMethod",
+  "caller_offset": "0x10d88",
+  "caller_module": "libtarget.so",
+  "arguments": {
+    "obj": "0x5001",
+    "methodID": "0x20000",
+    "resolved": "true",
+    "class_name": "com/security/RootChecker",
+    "method_name": "isRooted",
+    "sig": "()Z",
+    "resolved_method": "com/security/RootChecker.isRooted()Z",
+    "is_static": "false",
+    "return_type": "boolean",
+    "return_value": "0",
+    "mock_applied": "false"
+  }
+}
+```
+
+### Mock 적용 호출
+
+`--mock` 설정이 매칭되면 `mock_applied`가 `"true"`가 되고, `return_value`에는 실제 주입된 값이 기록됩니다.
+
+```json
+{
+  "function": "CallBooleanMethod",
+  "arguments": {
+    "resolved": "true",
+    "class_name": "com/security/RootChecker",
+    "method_name": "isRooted",
+    "sig": "()Z",
+    "resolved_method": "com/security/RootChecker.isRooted()Z",
+    "return_type": "boolean",
+    "return_value": "1",
+    "mock_applied": "true"
+  }
+}
+```
+
+### Unresolved 호출
+
+methodID를 해석하지 못한 경우에도 호출 자체는 JSON에 남습니다.
+
+```json
+{
+  "function": "CallObjectMethod",
+  "arguments": {
+    "obj": "0x5001",
+    "methodID": "0x20000",
+    "resolved": "false",
+    "class_name": "Unknown",
+    "method_name": "unknown",
+    "sig": "",
+    "resolved_method": "unresolved",
+    "return_type": "object",
+    "return_value": "0x5004",
+    "mock_applied": "false"
+  }
+}
+```
+
+### 분석 포인트
+
+- `resolved_method`는 `jni-analyzer`의 Layer 1/2에서 가장 중요한 근거 필드입니다.
+- `mock_applied=true`인 호출은 동적 검증 결과 해석 시 별도로 표시해야 합니다.
+- `return_value`는 fake JNI stub의 반환값입니다. 실제 Android VM의 반환값이 아니라는 점을 명확히 구분해야 합니다.
+- `caller_offset`과 `resolved_method`를 함께 보면 IDA/Ghidra 위치와 Java 호출 의미를 연결할 수 있습니다.
 
 ---
 
