@@ -11,6 +11,7 @@ jni_harness_*
 
 # Log files
 logs/
+runs/
 *.log
 *.json
 
@@ -38,6 +39,8 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+__pycache__/
+*.py[cod]
 
 # Compressed files
 *.zip

@@ -345,17 +345,14 @@ python/
 ### 4.2 기술 스택
 
 - Python 3.11+
-- uv
-- typer
-- rich
-- pydantic v2
-- orjson
+- 1차 구현은 stdlib argparse/json/subprocess 기반
+- uv / typer / rich / pydantic v2 / orjson은 UX와 타입 안정화가 필요해지는 시점에 도입
 - sqlite3 stdlib
 - mcp Python SDK는 Phase T4부터
 
-### 4.3 Pydantic 모델
+### 4.3 모델
 
-`models.py`:
+초기 stdlib 구현은 dict 기반으로 시작한다. 이후 `pydantic` 도입 시 다음 모델로 고정한다.
 
 ```python
 class JniCall:
@@ -396,11 +393,11 @@ class RunRecord:
 먼저 read-only/log 중심 명령부터 만든다.
 
 ```bash
-jni-tracer log validate logs/jni_hook.json
-jni-tracer log summary logs/jni_hook.json
-jni-tracer log calls logs/jni_hook.json --function CallBooleanMethod
-jni-tracer log methods logs/jni_hook.json
-jni-tracer log classes logs/jni_hook.json
+PYTHONPATH=python python3 -m jni_tracer log validate logs/jni_hook.json
+PYTHONPATH=python python3 -m jni_tracer log summary logs/jni_hook.json
+PYTHONPATH=python python3 -m jni_tracer log calls logs/jni_hook.json --function CallBooleanMethod
+PYTHONPATH=python python3 -m jni_tracer log natives logs/jni_hook.json
+PYTHONPATH=python python3 -m jni_tracer log classes logs/jni_hook.json
 
 jni-tracer mock template
 jni-tracer mock validate mock.json
@@ -411,20 +408,27 @@ jni-tracer diff logs/base.json logs/mock.json
 그 다음 실행 관련 명령을 붙인다.
 
 ```bash
-jni-tracer run target/libfoo.so --label base
-jni-tracer run target/libfoo.so --mock mock.json --label root_false
-jni-tracer runs list
-jni-tracer runs show <run_id>
-jni-tracer runs calls <run_id>
-jni-tracer runs diff <run_a> <run_b>
+PYTHONPATH=python python3 -m jni_tracer run \
+  --harness build/jni_harness_arm64_android \
+  --libs-dir target/libs/arm64-v8a \
+  --so libtarget.so \
+  --label target_plan \
+  --invoke-plan docs/generic_invoke_plan_example.json.example
+
+PYTHONPATH=python python3 -m jni_tracer runs list
+PYTHONPATH=python python3 -m jni_tracer runs show <run_id>
+PYTHONPATH=python python3 -m jni_tracer runs summary <run_id>
 ```
 
 ### 4.5 T1 완료 조건
 
-- [ ] `jni-tracer log validate`가 JSON 스키마를 검증한다.
-- [ ] `jni-tracer log summary`가 함수/클래스/메서드 통계를 출력한다.
-- [ ] `jni-tracer mock validate`가 기존 mock JSON을 검증한다.
-- [ ] `jni-tracer diff`가 두 JSON 로그의 차이를 구조화해서 출력한다.
+- [x] `jni-tracer log validate`가 JSON 스키마를 검증한다.
+- [x] `jni-tracer log summary`가 함수/클래스/메서드 통계를 출력한다.
+- [x] `jni-tracer log natives/classes/calls`가 구조화 JSON을 출력한다.
+- [x] `jni-tracer run`이 adb push/shell/pull을 자동 수행하고 run store를 만든다.
+- [x] `jni-tracer runs list/show/summary`가 run store를 조회한다.
+- [x] `jni-tracer mock validate`가 기존 mock JSON을 검증한다.
+- [x] `jni-tracer diff`가 두 JSON 로그의 차이를 구조화해서 출력한다.
 
 ---
 
@@ -552,9 +556,9 @@ macOS는 target Android ELF를 직접 실행할 수 없으므로, macOS에서는
 ### 6.4 T3 완료 조건
 
 - [ ] `jni-tracer devices`가 adb 기기 목록을 보여준다.
-- [ ] `jni-tracer run <so>`가 adb push/shell/pull을 자동 수행한다.
-- [ ] 실행 결과가 run store에 저장된다.
-- [ ] 실패 시 stderr/log/error가 구조화되어 저장된다.
+- [x] `jni-tracer run`이 adb push/shell/pull을 자동 수행한다.
+- [x] 실행 결과가 run store에 저장된다.
+- [x] 실패 시 stderr/log/error가 manifest에 구조화되어 저장된다.
 
 ---
 

@@ -84,6 +84,39 @@ type logs\jni_hook.log
 cat logs\jni_hook.json | jq .
 ```
 
+### Python CLI로 실행/요약 자동화
+
+저장된 JSON 로그를 바로 요약:
+
+```bash
+PYTHONPATH=python python3 -m jni_tracer log summary logs/jni_hook.json
+PYTHONPATH=python python3 -m jni_tracer log natives logs/jni_hook.json
+PYTHONPATH=python python3 -m jni_tracer log calls logs/jni_hook.json --function InvokeNative
+```
+
+Android 디바이스 실행과 로그 수집을 run store로 자동화:
+
+```bash
+PYTHONPATH=python python3 -m jni_tracer run \
+  --harness build/jni_harness_arm64_android \
+  --libs-dir target/libs/arm64-v8a \
+  --so libtarget.so \
+  --label target_plan \
+  --invoke-plan docs/generic_invoke_plan_example.json.example
+```
+
+출력 구조:
+
+```text
+runs/<run_id>/
+  manifest.json      # 실행 환경, adb command, 입력 plan/mock, 상태
+  summary.json       # 함수 빈도, RegisterNatives, invoke 결과 요약
+  invoke_plan.json   # 사용한 invoke plan 사본
+  logs/
+    jni_hook.log
+    jni_hook.json
+```
+
 ## 🔧 빌드 요구사항
 
 ### Windows 환경
@@ -113,6 +146,7 @@ cat logs\jni_hook.json | jq .
 - **[JSON_ANALYSIS_GUIDE.md](./JSON_ANALYSIS_GUIDE.md)** - JSON 로그 분석 방법
 - **[docs/mock_config.md](./docs/mock_config.md)** - Mock 설정 파일 사용법 (리턴값 주입)
 - **[docs/invoke_usage.md](./docs/invoke_usage.md)** - RegisterNatives entry 직접 호출 및 sequence 실행
+- **[python/README.md](./python/README.md)** - Python CLI와 run store 사용법
 
 ## ✨ 주요 기능
 
@@ -136,6 +170,7 @@ android-jni-tracer/
 ├── JSON_ANALYSIS_GUIDE.md    ← JSON 로그 분석 방법
 ├── Makefile                  ← Linux/macOS 빌드
 ├── build-android.ps1         ← Windows용 Android NDK 빌드 스크립트
+├── python/                   ← Python CLI / run store helper
 ├── docs/
 │   ├── mock_config.md        ← Mock 설정 파일 상세 문서
 │   └── invoke_usage.md       ← Native invoke 사용법

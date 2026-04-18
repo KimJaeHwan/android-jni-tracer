@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jni-tracer"
+version = "0.1.0"
+description = "CLI helpers for android-jni-tracer logs and Android runs"
+requires-python = ">=3.11"
+
+[project.scripts]
+jni-tracer = "jni_tracer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["jni_tracer*"]
