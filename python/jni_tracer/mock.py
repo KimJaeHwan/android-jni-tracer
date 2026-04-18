@@ -29,6 +29,10 @@ def template() -> dict[str, Any]:
 def validate_mock(path: str | Path) -> list[str]:
     with Path(path).open("r", encoding="utf-8") as f:
         data = json.load(f)
+    return validate_mock_data(data)
+
+
+def validate_mock_data(data: Any) -> list[str]:
     if not isinstance(data, dict):
         return ["top-level JSON value must be an object"]
 

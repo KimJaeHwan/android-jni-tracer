@@ -93,6 +93,33 @@ Available read-only tools:
 - `get_classes`
 - `diff_runs`
 
-Tool responses are JSON text payloads. Execution tools are intentionally not
-exposed yet; device control remains in the CLI until an explicit opt-in MCP
-execution mode is added.
+Tool responses are JSON text payloads. Device control remains hidden in the
+default MCP mode and is only exposed through the explicit opt-in execution
+mode below.
+
+## MCP Execution Opt-In
+
+Execution tools are only exposed when the server is started with
+`--allow-execute` and a configured harness/libs directory:
+
+```bash
+PYTHONPATH=python python3 -m jni_tracer mcp serve \
+  --runs-root runs \
+  --allow-execute \
+  --harness build/jni_harness_arm64_android \
+  --libs-dir target/libs/arm64-v8a \
+  --allowed-so-dir target/libs/arm64-v8a \
+  --timeout-sec 30
+```
+
+Additional tools in execution mode:
+
+- `run_harness`
+- `run_invoke_plan`
+
+`validate_mock_config` is always available because it does not execute the
+harness. Execution tools only accept `so_name` as a filename inside
+`--libs-dir`; path traversal and absolute SO paths are rejected. Each execution
+creates a normal `runs/<run_id>/` directory with `manifest.json`,
+`summary.json`, logs, and archived inline `mock.json` or `invoke_plan.json`
+when provided.

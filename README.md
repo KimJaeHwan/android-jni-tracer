@@ -134,6 +134,25 @@ LLM/MCP 클라이언트 연동을 위한 read-only MCP 서버도 제공한다.
 PYTHONPATH=python python3 -m jni_tracer mcp serve --runs-root runs
 ```
 
+MCP에서 실행 기능이 필요하면 명시적으로 opt-in 한다.
+이때 `so_name`은 `--libs-dir` 안의 파일명만 허용되며, `../`나 절대경로는 거부된다.
+
+```bash
+PYTHONPATH=python python3 -m jni_tracer mcp serve \
+  --runs-root runs \
+  --allow-execute \
+  --harness build/jni_harness_arm64_android \
+  --libs-dir target/libs/arm64-v8a \
+  --allowed-so-dir target/libs/arm64-v8a \
+  --timeout-sec 30
+```
+
+Execution MCP tools:
+
+- `validate_mock_config`: inline mock JSON 검증
+- `run_harness`: `JNI_OnLoad` 관측 run 생성
+- `run_invoke_plan`: inline invoke plan으로 run 생성
+
 ## 🔧 빌드 요구사항
 
 ### Windows 환경

@@ -10,6 +10,7 @@ from .diff import diff_logs
 from .log import filter_calls, load_log, registered_natives, summary, validate_log
 from .mock import template as mock_template
 from .mock import validate_mock
+from .mcp.execution import ExecutionConfig
 from .mcp.server import serve as mcp_serve
 from .runner import adb_run
 from .store import list_runs, run_log_path, run_manifest, run_summary
@@ -63,6 +64,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         invoke=args.invoke,
         args=args.arg,
         invoke_plan=args.invoke_plan,
+        timeout_sec=args.timeout_sec,
     )
     print_json({"status": "ok", "run_dir": str(run_dir), "manifest": str(run_dir / "manifest.json")})
     return 0
@@ -123,7 +125,15 @@ def cmd_diff(args: argparse.Namespace) -> int:
 
 
 def cmd_mcp(args: argparse.Namespace) -> int:
-    mcp_serve(args.runs_root)
+    execution_config = ExecutionConfig(
+        allow_execute=args.allow_execute,
+        harness=args.harness,
+        libs_dir=args.libs_dir,
+        allowed_so_dir=args.allowed_so_dir,
+        device_dir=args.device_dir,
+        timeout_sec=args.timeout_sec,
+    )
+    mcp_serve(args.runs_root, execution_config)
     return 0
 
 
@@ -155,6 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--invoke")
     run.add_argument("--arg", action="append", default=[])
     run.add_argument("--invoke-plan")
+    run.add_argument("--timeout-sec", type=int)
     run.set_defaults(func=cmd_run)
 
     runs = sub.add_parser("runs", help="Inspect run store")
@@ -199,10 +210,16 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("b")
     diff.set_defaults(func=cmd_diff)
 
-    mcp = sub.add_parser("mcp", help="Run MCP read-only server")
+    mcp = sub.add_parser("mcp", help="Run MCP server")
     mcp_sub = mcp.add_subparsers(dest="mcp_cmd", required=True)
     serve = mcp_sub.add_parser("serve")
     serve.add_argument("--runs-root", default="runs")
+    serve.add_argument("--allow-execute", action="store_true")
+    serve.add_argument("--harness")
+    serve.add_argument("--libs-dir")
+    serve.add_argument("--allowed-so-dir")
+    serve.add_argument("--device-dir", default="/data/local/tmp/jni-tracer-run")
+    serve.add_argument("--timeout-sec", type=int, default=30)
     serve.set_defaults(func=cmd_mcp)
 
     return parser

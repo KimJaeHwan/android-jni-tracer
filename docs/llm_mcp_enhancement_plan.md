@@ -111,6 +111,18 @@ jni-tracer mcp serve --allow-execute
 jni-tracer mcp serve --allow-execute --allowed-so-dir ./target
 ```
 
+현재 1차 구현은 stdlib MCP 서버에 opt-in execution tools를 추가한다.
+
+```bash
+PYTHONPATH=python python3 -m jni_tracer mcp serve \
+  --runs-root runs \
+  --allow-execute \
+  --harness build/jni_harness_arm64_android \
+  --libs-dir target/libs/arm64-v8a \
+  --allowed-so-dir target/libs/arm64-v8a \
+  --timeout-sec 30
+```
+
 ---
 
 ## 3. Phase T0 - JSON 로그 보강
@@ -651,30 +663,39 @@ jni-tracer mcp serve --allow-execute --allowed-so-dir ./target
 ### 8.2 Execution tools
 
 ```text
-run_harness(so_path, arch=None, mock_config=None, label=None, timeout=60)
+run_harness(so_name, mock_config=None, label=None, timeout_sec=30)
 invoke_native(so_path, target, args=None, mock_config=None, label=None, timeout=60)
-run_invoke_plan(so_path, plan, mock_config=None, label=None, timeout=60)
+run_invoke_plan(so_name, invoke_plan, mock_config=None, label=None, timeout_sec=30)
 create_mock_config(methods)
-validate_mock_config(content)
+validate_mock_config(mock_config)
 rerun_with_mock(base_run_id, mock_overrides, label=None)
 ```
+
+구현 완료된 1차 tools:
+
+- `validate_mock_config`
+- `run_harness`
+- `run_invoke_plan`
 
 ### 8.3 안전 규칙
 
 - `--allow-execute` 없으면 실행 도구 등록 안 함
-- `so_path`는 allowlist 경로 안에 있어야 함
+- `so_name`은 파일명만 허용하고 `--libs-dir` 안에서만 조회함
+- `so_path` 직접 입력, 절대경로, `../` traversal은 거부함
+- target `.so`는 `--allowed-so-dir` allowlist 안에 있어야 함
 - timeout 기본값 필수
 - 모든 실행은 run store에 기록
-- invoke plan은 감사 로그에 원문과 hash를 함께 남김
-- mock content는 hash로 저장
-- tool call arguments와 result를 감사 로그에 남김
+- inline invoke plan/mock은 run store에 `invoke_plan.json`/`mock.json`으로 보관함
+- tool call 핵심 metadata는 manifest에 저장함
 
 ### 8.4 T5 완료 조건
 
+- [x] `run_harness`가 MCP에서 Android run을 생성한다.
+- [x] `run_invoke_plan`이 MCP에서 Android invoke run을 생성한다.
+- [x] `diff_runs`로 변화가 확인된다.
+- [x] 허용되지 않은 경로의 SO 실행이 거부된다.
+- [x] timeout과 실패 로그가 구조화된다.
 - [ ] `rerun_with_mock`가 base run과 mock run을 생성한다.
-- [ ] `diff_runs`로 변화가 확인된다.
-- [ ] 허용되지 않은 경로의 SO 실행이 거부된다.
-- [ ] timeout과 실패 로그가 구조화된다.
 
 ---
 

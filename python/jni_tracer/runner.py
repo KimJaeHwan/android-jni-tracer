@@ -11,8 +11,12 @@ from .log import load_log, summary
 from .store import ensure_run_dir, make_run_id, write_json
 
 
-def run_cmd(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, check=check, text=True, capture_output=True)
+def run_cmd(
+    cmd: list[str],
+    check: bool = True,
+    timeout: int | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, check=check, text=True, capture_output=True, timeout=timeout)
 
 
 def sha256_file(path: str | Path) -> str:
@@ -34,6 +38,8 @@ def adb_run(
     invoke: str | None = None,
     args: list[str] | None = None,
     invoke_plan: str | Path | None = None,
+    timeout_sec: int | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> Path:
     harness = Path(harness)
     libs_dir = Path(libs_dir)
@@ -82,7 +88,15 @@ def adb_run(
         shell_parts.append(f"--invoke-plan {Path(remote_plan).name}")
 
     command = " && ".join(shell_parts[:4]) + " && " + " ".join(shell_parts[4:])
-    proc = run_cmd(["adb", "shell", command], check=False)
+    try:
+        proc = run_cmd(["adb", "shell", command], check=False, timeout=timeout_sec)
+    except subprocess.TimeoutExpired as exc:
+        proc = subprocess.CompletedProcess(
+            exc.cmd,
+            124,
+            stdout=exc.stdout or "",
+            stderr=(exc.stderr or "") + f"\ntimeout after {timeout_sec} seconds",
+        )
 
     pull_dir = run_dir / "logs"
     pull_dir.mkdir(parents=True, exist_ok=True)
@@ -94,6 +108,8 @@ def adb_run(
         log_summary = summary(load_log(log_json))
         write_json(run_dir / "summary.json", log_summary)
 
+    archived_mock = run_dir / "mock.json" if mock else None
+    archived_invoke_plan = run_dir / "invoke_plan.json" if invoke_plan else None
     manifest = {
         "run_id": run_id,
         "label": label,
@@ -107,10 +123,14 @@ def adb_run(
         "harness_sha256": sha256_file(harness),
         "libs_dir": str(libs_dir),
         "so_name": so_name,
-        "mock": str(mock) if mock else None,
+        "mock": str(archived_mock) if archived_mock else None,
+        "input_mock": str(mock) if mock else None,
         "invoke": invoke,
         "args": args or [],
-        "invoke_plan": str(invoke_plan) if invoke_plan else None,
+        "invoke_plan": str(archived_invoke_plan) if archived_invoke_plan else None,
+        "input_invoke_plan": str(invoke_plan) if invoke_plan else None,
+        "timeout_sec": timeout_sec,
+        "metadata": metadata or {},
         "shell_command": command,
         "stdout": proc.stdout,
         "stderr": proc.stderr,
@@ -118,9 +138,9 @@ def adb_run(
         "summary_path": str(run_dir / "summary.json") if log_summary else None,
     }
     write_json(run_dir / "manifest.json", manifest)
-    if invoke_plan:
-        shutil.copy2(invoke_plan, run_dir / "invoke_plan.json")
-    if mock:
-        shutil.copy2(mock, run_dir / "mock.json")
+    if invoke_plan and archived_invoke_plan:
+        shutil.copy2(invoke_plan, archived_invoke_plan)
+    if mock and archived_mock:
+        shutil.copy2(mock, archived_mock)
 
     return run_dir
