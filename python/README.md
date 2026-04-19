@@ -106,6 +106,9 @@ Tool responses include FastMCP structured output when the client supports it.
 Device control remains hidden in the default MCP mode and is only exposed
 through the explicit opt-in execution mode below.
 
+For Codex, VS Code-style MCP clients, and model/client separation details, see
+[`docs/mcp_setup_guide.md`](../docs/mcp_setup_guide.md).
+
 ## MCP Execution Opt-In
 
 Execution tools are only exposed when the server is started with

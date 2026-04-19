@@ -191,6 +191,8 @@ Execution MCP tools:
 - **[JSON_ANALYSIS_GUIDE.md](./JSON_ANALYSIS_GUIDE.md)** - JSON 로그 분석 방법
 - **[docs/mock_config.md](./docs/mock_config.md)** - Mock 설정 파일 사용법 (리턴값 주입)
 - **[docs/invoke_usage.md](./docs/invoke_usage.md)** - RegisterNatives entry 직접 호출 및 sequence 실행
+- **[docs/mcp_setup_guide.md](./docs/mcp_setup_guide.md)** - Codex/VS Code 계열 MCP client 연결 방법
+- **[docs/final_feature_checklist.md](./docs/final_feature_checklist.md)** - 전체 기능 점검표와 MCP 연동 가이드
 - **[python/README.md](./python/README.md)** - Python CLI와 run store 사용법
 
 ## ✨ 주요 기능
