@@ -392,45 +392,30 @@ Codex가 직접 알 수 없는 것:
 - 설정 파일 경로
 - read-only만 쓸지 execution도 켤지
 
-## 8. Verified Runs
+## 8. Verification Policy
 
-실제 rooted Android device에서 검증된 run 예시:
+공개 문서에는 내부 분석 대상 앱의 run id, class name, method name, 문자열 결과를
+기록하지 않는다. 실제 검증 결과는 로컬 `runs/` artifact 또는 비공개 보고서에서
+관리한다.
 
-- `baseline_probe`
-  - invoke plan 실행
-  - total calls: 77
-  - `InvokeNative`: 4
-  - `processEvent`에서 `GetStringUTFChars("test")`, `NewStringUTF("1")` 관측
+공개 가능한 검증 항목:
 
-- `mcp_exec_base_sample`
-  - MCP `run_harness`
-  - total calls: 66
-
-- `mcp_exec_invoke_sample`
-  - MCP `run_invoke_plan`
-  - total calls: 68
-  - `InvokeNative`: 1
-
-- `rerun_mock_sample`
-  - MCP `rerun_with_mock`
-  - base invoke plan 재사용
-  - mock archive 확인
-  - diff 반환 확인
-
-- `fastmcp_rerun_sample`
-  - FastMCP SDK 기반 `rerun_with_mock`
-  - structured output 확인
-  - status: ok
+- CLI `run`으로 Android device 실행이 완료되는지
+- `summary.json`과 `jni_hook.json`이 생성되는지
+- `RegisterNatives` 이벤트가 JSON에 기록되는지
+- `run_invoke_plan`이 `InvokeNative` 이벤트를 생성하는지
+- `rerun_with_mock`이 새 run과 diff 결과를 반환하는지
+- FastMCP structured output이 반환되는지
 
 ## 9. Smoke Tests
 
 ### 9.1 CLI smoke
 
 ```bash
-PYTHONPATH=python python3 -m jni_tracer log validate runs/baseline_probe/logs/jni_hook.json
-PYTHONPATH=python python3 -m jni_tracer runs summary baseline_probe
-PYTHONPATH=python python3 -m jni_tracer runs natives baseline_probe
-PYTHONPATH=python python3 -m jni_tracer runs diff mcp_exec_base_sample baseline_probe
+PYTHONPATH=python python3 -m jni_tracer log validate runs/<run_id>/logs/jni_hook.json
+PYTHONPATH=python python3 -m jni_tracer runs summary <run_id>
+PYTHONPATH=python python3 -m jni_tracer runs natives <run_id>
+PYTHONPATH=python python3 -m jni_tracer runs diff <base_run_id> <experiment_run_id>
 ```
 
 ### 9.2 MCP read-only smoke
@@ -444,9 +429,9 @@ jni-tracer mcp serve --runs-root runs
 클라이언트에서 확인:
 
 - `tools/list`
-- `get_summary(run_id="baseline_probe")`
-- `get_natives(run_id="baseline_probe")`
-- `get_calls(run_id="baseline_probe", function="InvokeNative")`
+- `get_summary(run_id="<run_id>")`
+- `get_natives(run_id="<run_id>")`
+- `get_calls(run_id="<run_id>", function="InvokeNative")`
 
 ### 9.3 MCP execution smoke
 
@@ -473,7 +458,7 @@ jni-tracer mcp serve --runs-root runs
 {
   "tool": "rerun_with_mock",
   "arguments": {
-    "base_run_id": "mcp_exec_invoke_sample",
+    "base_run_id": "<base_run_id>",
     "label": "mock_rerun_smoke",
     "reuse_invoke_plan": true,
     "mock_config": {
