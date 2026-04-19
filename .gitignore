@@ -15,6 +15,9 @@ runs/
 *.log
 *.json
 
+# Private reports / internal analysis notes
+private_reports/
+
 # Target SO files (test files)
 target/*.so
 target/*.a
