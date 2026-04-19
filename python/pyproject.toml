@@ -7,6 +7,9 @@ name = "jni-tracer"
 version = "0.1.0"
 description = "CLI helpers for android-jni-tracer logs and Android runs"
 requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.27.0",
+]
 
 [project.scripts]
 jni-tracer = "jni_tracer.cli:main"

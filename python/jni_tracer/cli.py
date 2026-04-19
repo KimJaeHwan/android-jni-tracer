@@ -11,7 +11,6 @@ from .log import filter_calls, load_log, registered_natives, summary, validate_l
 from .mock import template as mock_template
 from .mock import validate_mock
 from .mcp.execution import ExecutionConfig
-from .mcp.server import serve as mcp_serve
 from .runner import adb_run
 from .store import list_runs, run_log_path, run_manifest, run_summary
 
@@ -125,6 +124,8 @@ def cmd_diff(args: argparse.Namespace) -> int:
 
 
 def cmd_mcp(args: argparse.Namespace) -> int:
+    from .mcp.server import serve as mcp_serve
+
     execution_config = ExecutionConfig(
         allow_execute=args.allow_execute,
         harness=args.harness,

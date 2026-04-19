@@ -111,7 +111,7 @@ jni-tracer mcp serve --allow-execute
 jni-tracer mcp serve --allow-execute --allowed-so-dir ./target
 ```
 
-현재 1차 구현은 stdlib MCP 서버에 opt-in execution tools를 추가한다.
+현재 구현은 공식 FastMCP Python SDK 기반 MCP 서버에 opt-in execution tools를 추가한다.
 
 ```bash
 PYTHONPATH=python python3 -m jni_tracer mcp serve \
@@ -591,7 +591,7 @@ LLM이 안전하게 기존 로그와 run store를 조회할 수 있게 한다.
 jni-tracer mcp serve
 ```
 
-현재 stdlib 기반 read-only 서버는 다음 명령으로 실행한다.
+현재 FastMCP 기반 read-only 서버는 다음 명령으로 실행한다.
 
 ```bash
 PYTHONPATH=python python3 -m jni_tracer mcp serve --runs-root runs
@@ -641,7 +641,7 @@ FindClass가 많이 호출되었습니다. 아마 클래스 조회를 많이 한
 
 ### 7.4 T4 완료 조건
 
-- [x] MCP 서버가 read-only로 실행된다.
+- [x] MCP 서버가 FastMCP SDK 기반 read-only로 실행된다.
 - [x] LLM/MCP 클라이언트가 run 목록과 calls를 조회할 수 있다.
 - [x] `diff_runs`가 구조화 diff를 반환한다.
 - [x] 실행 도구는 아직 노출하지 않는다.
@@ -765,8 +765,8 @@ Phase 4 이후 `jni-analyzer`의 Dynamic Agent는 tracer MCP에 의존한다.
 ### P3
 
 - [x] MCP read-only server
-- [ ] MCP execution opt-in
-- [ ] `rerun_with_mock`
+- [x] MCP execution opt-in
+- [x] `rerun_with_mock`
 
 ---
 

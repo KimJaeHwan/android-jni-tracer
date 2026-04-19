@@ -127,11 +127,19 @@ PYTHONPATH=python python3 -m jni_tracer runs calls <run_id> --function InvokeNat
 PYTHONPATH=python python3 -m jni_tracer runs diff <base_run_id> <experiment_run_id>
 ```
 
-LLM/MCP 클라이언트 연동을 위한 read-only MCP 서버도 제공한다.
+LLM/MCP 클라이언트 연동을 위한 FastMCP 기반 read-only MCP 서버도 제공한다.
 이 서버는 기존 run store만 조회하며 adb 실행 기능은 노출하지 않는다.
 
 ```bash
 PYTHONPATH=python python3 -m jni_tracer mcp serve --runs-root runs
+```
+
+MCP 서버를 실행하려면 Python 패키지 의존성을 먼저 설치한다.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -e python
 ```
 
 MCP에서 실행 기능이 필요하면 명시적으로 opt-in 한다.

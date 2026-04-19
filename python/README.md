@@ -76,8 +76,17 @@ filters. These commands read from `runs/<run_id>/logs/jni_hook.json`.
 
 ## MCP Read-Only Server
 
-The MCP server exposes the existing run store to an LLM client without
-executing the harness or touching adb:
+The MCP server is implemented with the official FastMCP Python SDK. Install
+the package dependencies before serving MCP:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -e python
+```
+
+It exposes the existing run store to an LLM client without executing the
+harness or touching adb:
 
 ```bash
 PYTHONPATH=python python3 -m jni_tracer mcp serve --runs-root runs
@@ -93,9 +102,9 @@ Available read-only tools:
 - `get_classes`
 - `diff_runs`
 
-Tool responses are JSON text payloads. Device control remains hidden in the
-default MCP mode and is only exposed through the explicit opt-in execution
-mode below.
+Tool responses include FastMCP structured output when the client supports it.
+Device control remains hidden in the default MCP mode and is only exposed
+through the explicit opt-in execution mode below.
 
 ## MCP Execution Opt-In
 
