@@ -30,15 +30,15 @@ Mock 설정을 사용하면 `isRooted → true`로 주입하여 **분기 A까지
 ./jni_harness target/libnative.so
 
 # mock 설정 주입
-./jni_harness --mock mock.json target/libnative.so
+./jni_harness target/libnative.so --mock mock.json
 
 # 단축 옵션
-./jni_harness -m mock.json target/libnative.so
+./jni_harness target/libnative.so -m mock.json
 ```
 
 Android 디바이스에서:
 ```bash
-adb shell "cd /data/local/tmp && ./jni_harness_arm64_android --mock mock.json ./libnative.so"
+adb shell "cd /data/local/tmp && ./jni_harness_arm64_android ./libnative.so --mock mock.json"
 ```
 
 ---

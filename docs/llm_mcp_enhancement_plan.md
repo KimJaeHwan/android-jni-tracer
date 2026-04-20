@@ -539,7 +539,7 @@ CREATE TABLE mock_configs (
 adb push harness /data/local/tmp/
 adb push target.so /data/local/tmp/
 adb push mock.json /data/local/tmp/
-adb shell "cd /data/local/tmp && LD_LIBRARY_PATH=. ./jni_harness_arm64_android --mock mock.json ./target.so"
+adb shell "cd /data/local/tmp && LD_LIBRARY_PATH=. ./jni_harness_arm64_android ./target.so --mock mock.json"
 adb pull /data/local/tmp/logs/ logs/
 ```
 

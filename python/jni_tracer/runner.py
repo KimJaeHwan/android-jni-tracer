@@ -77,9 +77,9 @@ def adb_run(
         "mkdir logs",
         "LD_LIBRARY_PATH=. ./jni_harness_arm64_android",
     ]
+    shell_parts.append(f"./{so_name}")
     if remote_mock:
         shell_parts.append(f"--mock {Path(remote_mock).name}")
-    shell_parts.append(f"./{so_name}")
     if invoke:
         shell_parts.append(f"--invoke '{invoke}'")
         for arg in args or []:

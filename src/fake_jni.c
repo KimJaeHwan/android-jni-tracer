@@ -280,6 +280,11 @@ static StringEntry* pool_find(jstring handle) {
     return NULL;
 }
 
+const char* fake_jni_string_utf8(jstring string) {
+    StringEntry* entry = pool_find(string);
+    return entry ? entry->utf8 : NULL;
+}
+
 /* Release all pool memory */
 static void pool_destroy(void) {
     for (int i = 0; i < string_count; i++) {

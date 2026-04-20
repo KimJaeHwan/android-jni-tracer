@@ -109,8 +109,10 @@ and an `InvokeNative` result event after the native call:
     "status": "called",
     "return_type": "jstring",
     "return_value": "0x70010",
+    "return_string": "result-text",
     "reason": "",
-    "sequence_step": "0"
+    "sequence_step": "0",
+    "invoke_args": "[int:1, int:2, string:test]"
   }
 }
 ```
@@ -118,6 +120,12 @@ and an `InvokeNative` result event after the native call:
 JNI calls made by the invoked native function are logged normally, with
 `caller_module` and `caller_offset` pointing back into the target SO when
 address resolution succeeds.
+
+For `jstring` returns, `return_value` keeps the fake JNI handle and
+`return_string` contains the decoded UTF-8 value when it was created through
+the fake JNI string pool. `invoke_args` records the typed argument values used
+for the call so an LLM can compare input and output without reconstructing the
+plan from a separate file.
 
 For single `--invoke`, `sequence_step` is `-1`. For `--invoke-plan`, it is the
 zero-based plan step index.

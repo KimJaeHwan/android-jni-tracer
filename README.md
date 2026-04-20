@@ -2,34 +2,57 @@
 
 Android `.so` 파일의 JNI 함수 호출을 후킹하여 분석하는 동적 분석 도구
 
-**Windows에서 빌드 → Android에서 실행**
+**macOS/Linux/Windows에서 빌드 → Android에서 실행**
 
 ## ⚠️ 중요: 실행 환경
 
 **이 프로그램은 Android 기기에서 실행되는 네이티브 바이너리입니다.**
 
 ✅ **지원 환경:**
-- **Windows + Android NDK** - 빌드 환경 (Android 타겟 바이너리 생성)
+- **macOS/Linux + Android NDK** - `make android-arm64` / `make android-x86_64`
+- **Windows + Android NDK** - `build-android.ps1`
 - **Android OS** - 실행 환경 (실제 기기 또는 에뮬레이터)
 
 📌 **빌드 프로세스:**
-1. Windows에서 Android NDK로 ARM64/x86_64 바이너리 빌드
+1. PC에서 Android NDK로 ARM64/x86_64 바이너리 빌드
 2. adb를 통해 Android 기기로 전송
 3. Android 기기에서 실행
 
 ❌ **직접 실행 불가:**
-- Windows 네이티브 환경 (빌드만 가능, 실행 불가)
-- Linux/macOS 데스크톱 (Android 전용 바이너리)
+- Windows/Linux/macOS 데스크톱에서 Android용 바이너리 직접 실행
+- 데스크톱 로컬 검증은 `make`로 생성되는 host용 `build/jni_harness_<arch>` 사용
 
 ## 🎯 Quick Start
 
-**Windows에서 빌드 → Android에서 실행**
+**PC에서 빌드 → Android에서 실행**
 
-### 1단계: Windows에서 빌드
+### 1단계: macOS/Linux에서 빌드
 
 **필수 요구사항:**
-- Android Studio + NDK 설치
-- PowerShell 실행 권한
+- Android NDK 설치
+- NDK 위치 자동 탐색 지원:
+  - `ANDROID_NDK_HOME`
+  - `ANDROID_NDK_ROOT`
+  - `$ANDROID_HOME/ndk/<version>`
+  - `$ANDROID_SDK_ROOT/ndk/<version>`
+  - Homebrew Cask `android-ndk`
+
+```bash
+# ARM64 빌드 (실제 Android 기기용)
+make android-arm64
+
+# x86_64 빌드 (Android 에뮬레이터용)
+make android-x86_64
+
+# NDK 경로를 직접 지정해야 하는 경우
+make android-arm64 ANDROID_NDK=/absolute/path/to/ndk
+
+# 빌드 결과
+#    build/jni_harness_arm64_android
+#    build/jni_harness_x86_64_android
+```
+
+### Windows에서 빌드
 
 ```powershell
 # Android Studio에서 NDK 설치 (한 번만)
@@ -61,7 +84,7 @@ adb shell "cd /data/local/tmp && LD_LIBRARY_PATH=. ./jni_harness_arm64_android .
 
 # Mock 설정 주입 (리턴값 조작)
 adb push mock.json /data/local/tmp/
-adb shell "cd /data/local/tmp && LD_LIBRARY_PATH=. ./jni_harness_arm64_android --mock mock.json ./libtarget.so"
+adb shell "cd /data/local/tmp && LD_LIBRARY_PATH=. ./jni_harness_arm64_android ./libtarget.so --mock mock.json"
 
 # RegisterNatives entry 직접 호출
 adb shell "cd /data/local/tmp && LD_LIBRARY_PATH=. ./jni_harness_arm64_android ./libtarget.so --invoke 'com/example/app/NativeBridge.processEvent(IILjava/lang/String;)Ljava/lang/String;' --arg int:1 --arg int:2 --arg string:test"
@@ -163,6 +186,13 @@ Execution MCP tools:
 - `rerun_with_mock`: 기존 run 조건을 재사용해 mock 적용 run을 만들고 diff 반환
 
 ## 🔧 빌드 요구사항
+
+### macOS/Linux 환경
+- **Android NDK** 설치
+- 권장 명령:
+  - `make android-arm64`
+  - `make android-x86_64`
+- 자동 탐색이 실패하면 `ANDROID_NDK=/absolute/path/to/ndk`를 지정
 
 ### Windows 환경
 - **Android Studio** 설치

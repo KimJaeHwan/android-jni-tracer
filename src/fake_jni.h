@@ -35,6 +35,7 @@ const NativeRegistryEntry* native_registry_find(const char* class_name,
 /* Resolve or create fake handles used by invoke dispatch */
 jclass fake_jni_find_class(const char* class_name);
 jstring fake_jni_new_string_utf(const char* utf8);
+const char* fake_jni_string_utf8(jstring string);
 
 #ifdef __cplusplus
 }

@@ -70,6 +70,7 @@ typedef struct {
 } InvokeStep;
 
 static int g_current_invoke_step = -1;
+static char g_current_invoke_args_text[1024] = "";
 
 /* Fake JavaVM function implementations */
 static jint JNICALL fake_DestroyJavaVM(JavaVM* vm) {
@@ -333,15 +334,52 @@ static int parse_invoke_target(const char* text, InvokeTarget* out) {
     return 0;
 }
 
-static void log_invoke_json(const char* class_name, const char* method_name,
-                            const char* signature, const void* fnPtr,
-                            const char* status, const char* return_type,
-                            const char* return_value, const char* reason) {
+static const char* invoke_arg_type_name(InvokeArgType type) {
+    switch (type) {
+        case INVOKE_ARG_BOOL: return "bool";
+        case INVOKE_ARG_INT: return "int";
+        case INVOKE_ARG_LONG: return "long";
+        case INVOKE_ARG_FLOAT: return "float";
+        case INVOKE_ARG_DOUBLE: return "double";
+        case INVOKE_ARG_STRING: return "string";
+        case INVOKE_ARG_OBJECT: return "object";
+        default: return "unknown";
+    }
+}
+
+static void format_invoke_args(const InvokeArg* args, int argc, char* out, size_t out_size) {
+    if (!out || out_size == 0) return;
+    out[0] = '\0';
+    if (!args || argc <= 0) {
+        snprintf(out, out_size, "[]");
+        return;
+    }
+
+    size_t used = 0;
+    used += (size_t)snprintf(out + used, used < out_size ? out_size - used : 0, "[");
+    for (int i = 0; i < argc && used < out_size; i++) {
+        const char* sep = i == 0 ? "" : ", ";
+        used += (size_t)snprintf(out + used, used < out_size ? out_size - used : 0,
+                                 "%s%s:%s", sep, invoke_arg_type_name(args[i].type), args[i].text);
+    }
+    if (used < out_size) {
+        snprintf(out + used, out_size - used, "]");
+    } else {
+        out[out_size - 1] = '\0';
+    }
+}
+
+static void log_invoke_json_ex(const char* class_name, const char* method_name,
+                               const char* signature, const void* fnPtr,
+                               const char* status, const char* return_type,
+                               const char* return_value, const char* reason,
+                               const char* return_string) {
     const char* arg_names[] = {
         "class_name", "method_name", "sig", "fnPtr",
-        "status", "return_type", "return_value", "reason", "sequence_step"
+        "status", "return_type", "return_value", "return_string",
+        "reason", "sequence_step", "invoke_args"
     };
-    char arg_values[9][512];
+    char arg_values[11][1024];
     snprintf(arg_values[0], sizeof(arg_values[0]), "%s", class_name ? class_name : "");
     snprintf(arg_values[1], sizeof(arg_values[1]), "%s", method_name ? method_name : "");
     snprintf(arg_values[2], sizeof(arg_values[2]), "%s", signature ? signature : "");
@@ -349,13 +387,24 @@ static void log_invoke_json(const char* class_name, const char* method_name,
     snprintf(arg_values[4], sizeof(arg_values[4]), "%s", status ? status : "");
     snprintf(arg_values[5], sizeof(arg_values[5]), "%s", return_type ? return_type : "");
     snprintf(arg_values[6], sizeof(arg_values[6]), "%s", return_value ? return_value : "");
-    snprintf(arg_values[7], sizeof(arg_values[7]), "%s", reason ? reason : "");
-    snprintf(arg_values[8], sizeof(arg_values[8]), "%d", g_current_invoke_step);
+    snprintf(arg_values[7], sizeof(arg_values[7]), "%s", return_string ? return_string : "");
+    snprintf(arg_values[8], sizeof(arg_values[8]), "%s", reason ? reason : "");
+    snprintf(arg_values[9], sizeof(arg_values[9]), "%d", g_current_invoke_step);
+    snprintf(arg_values[10], sizeof(arg_values[10]), "%s", g_current_invoke_args_text);
     const char* arg_value_ptrs[] = {
         arg_values[0], arg_values[1], arg_values[2], arg_values[3],
-        arg_values[4], arg_values[5], arg_values[6], arg_values[7], arg_values[8]
+        arg_values[4], arg_values[5], arg_values[6], arg_values[7],
+        arg_values[8], arg_values[9], arg_values[10]
     };
-    log_jni_call_json("InvokeNative", arg_names, arg_value_ptrs, 9);
+    log_jni_call_json("InvokeNative", arg_names, arg_value_ptrs, 11);
+}
+
+static void log_invoke_json(const char* class_name, const char* method_name,
+                            const char* signature, const void* fnPtr,
+                            const char* status, const char* return_type,
+                            const char* return_value, const char* reason) {
+    log_invoke_json_ex(class_name, method_name, signature, fnPtr, status,
+                       return_type, return_value, reason, "");
 }
 
 static void log_invoke_start_json(const NativeRegistryEntry* entry) {
@@ -528,6 +577,9 @@ static int run_invoke_plan(JNIEnv* env, const char* plan_path) {
 
 static int invoke_registered_native(JNIEnv* env, const InvokeTarget* target,
                                     InvokeArg* args, int argc) {
+    format_invoke_args(args, argc, g_current_invoke_args_text,
+                       sizeof(g_current_invoke_args_text));
+
     const NativeRegistryEntry* entry = native_registry_find(target->class_name,
                                                             target->method_name,
                                                             target->signature);
@@ -598,8 +650,9 @@ static int invoke_registered_native(JNIEnv* env, const InvokeTarget* target,
         jstring ret = ((Fn)entry->fnPtr)(env, clazz, args[0].value.i, args[1].value.i, s0);
         char ret_text[64];
         snprintf(ret_text, sizeof(ret_text), "%p", (void*)ret);
-        log_invoke_json(entry->class_name, entry->method_name, entry->signature,
-                        entry->fnPtr, "called", "jstring", ret_text, "");
+        log_invoke_json_ex(entry->class_name, entry->method_name, entry->signature,
+                           entry->fnPtr, "called", "jstring", ret_text, "",
+                           fake_jni_string_utf8(ret));
         return 0;
     }
     if (strcmp(entry->signature, "(Ljava/lang/String;)V") == 0) {
@@ -656,8 +709,9 @@ static int invoke_registered_native(JNIEnv* env, const InvokeTarget* target,
         jstring ret = ((Fn)entry->fnPtr)(env, clazz, args[0].value.j, args[1].value.i);
         char ret_text[64];
         snprintf(ret_text, sizeof(ret_text), "%p", (void*)ret);
-        log_invoke_json(entry->class_name, entry->method_name, entry->signature,
-                        entry->fnPtr, "called", "jstring", ret_text, "");
+        log_invoke_json_ex(entry->class_name, entry->method_name, entry->signature,
+                           entry->fnPtr, "called", "jstring", ret_text, "",
+                           fake_jni_string_utf8(ret));
         return 0;
     }
     if (strcmp(entry->signature, "(JI)J") == 0) {
@@ -721,7 +775,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (!so_path) {
-        fprintf(stderr, "Usage: %s [--mock <config.json>] [--invoke <class.method(sig)> --arg <type:value>...] [--invoke-plan <plan.json>] <target_so_path>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <target_so_path> [--mock <config.json>] [--invoke <class.method(sig)> --arg <type:value>...] [--invoke-plan <plan.json>]\n", argv[0]);
         fprintf(stderr, "\n");
         fprintf(stderr, "Options:\n");
         fprintf(stderr, "  --mock, -m <file>  Load mock return-value config (JSON)\n");
@@ -735,7 +789,7 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "\n");
         fprintf(stderr, "Examples:\n");
         fprintf(stderr, "  %s target/libnative.so\n", argv[0]);
-        fprintf(stderr, "  %s --mock mock.json target/libnative.so\n", argv[0]);
+        fprintf(stderr, "  %s target/libnative.so --mock mock.json\n", argv[0]);
         fprintf(stderr, "  %s target/libnative.so --invoke 'com/example/Foo.bar(II)V' --arg int:1 --arg int:2\n", argv[0]);
         fprintf(stderr, "  %s target/libnative.so --invoke-plan invoke_plan.json\n", argv[0]);
         fprintf(stderr, "\n");
