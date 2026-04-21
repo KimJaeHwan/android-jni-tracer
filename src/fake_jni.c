@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <pthread.h>
 
 /* ============================================
  * CLASS NAME MAPPING TABLE
@@ -28,23 +29,29 @@ typedef struct {
 static ClassEntry class_table[MAX_CLASSES];
 static int class_count = 0;
 static uintptr_t next_class_id = 0x10000;
+static pthread_mutex_t g_fake_jni_state_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Fake JavaVM pointer registered from main.c */
 static JavaVM* g_fake_javavm = NULL;
 
 void set_fake_javavm(JavaVM* vm) {
+    pthread_mutex_lock(&g_fake_jni_state_lock);
     g_fake_javavm = vm;
+    pthread_mutex_unlock(&g_fake_jni_state_lock);
 }
 
 /* Register a new class and return unique jclass pointer */
 static jclass register_class(const char* name) {
+    pthread_mutex_lock(&g_fake_jni_state_lock);
     if (class_count >= MAX_CLASSES) {
+        pthread_mutex_unlock(&g_fake_jni_state_lock);
         return (jclass)0xFFFF; // overflow
     }
     
     // Check if already registered
     for (int i = 0; i < class_count; i++) {
         if (strcmp(class_table[i].name, name) == 0) {
+            pthread_mutex_unlock(&g_fake_jni_state_lock);
             return class_table[i].ptr;
         }
     }
@@ -57,17 +64,22 @@ static jclass register_class(const char* name) {
     strncpy(class_table[class_count].name, name, 255);
     class_table[class_count].name[255] = '\0';
     class_count++;
-    
+
+    pthread_mutex_unlock(&g_fake_jni_state_lock);
     return new_class;
 }
 
 /* Get class name from jclass pointer */
 static const char* get_class_name(jclass clazz) {
+    pthread_mutex_lock(&g_fake_jni_state_lock);
     for (int i = 0; i < class_count; i++) {
         if (class_table[i].ptr == clazz) {
-            return class_table[i].name;
+            const char* name = class_table[i].name;
+            pthread_mutex_unlock(&g_fake_jni_state_lock);
+            return name;
         }
     }
+    pthread_mutex_unlock(&g_fake_jni_state_lock);
     return "Unknown";
 }
 
@@ -94,16 +106,19 @@ static void native_registry_register(const char* class_name,
     const char* mn = method_name ? method_name : "NULL";
     const char* sg = signature ? signature : "NULL";
 
+    pthread_mutex_lock(&g_fake_jni_state_lock);
     for (int i = 0; i < native_registry_count; i++) {
         if (strcmp(native_registry[i].class_name, cn) == 0 &&
             strcmp(native_registry[i].method_name, mn) == 0 &&
             strcmp(native_registry[i].signature, sg) == 0) {
             native_registry[i].fnPtr = fnPtr;
+            pthread_mutex_unlock(&g_fake_jni_state_lock);
             return;
         }
     }
 
     if (native_registry_count >= MAX_NATIVE_REGISTRY) {
+        pthread_mutex_unlock(&g_fake_jni_state_lock);
         log_warning("Native registry full; skipping %s.%s%s", cn, mn, sg);
         return;
     }
@@ -116,19 +131,24 @@ static void native_registry_register(const char* class_name,
     strncpy(e->signature, sg, sizeof(e->signature) - 1);
     e->signature[sizeof(e->signature) - 1] = '\0';
     e->fnPtr = fnPtr;
+    pthread_mutex_unlock(&g_fake_jni_state_lock);
 }
 
 const NativeRegistryEntry* native_registry_find(const char* class_name,
                                                 const char* method_name,
                                                 const char* signature) {
     if (!class_name || !method_name || !signature) return NULL;
+    pthread_mutex_lock(&g_fake_jni_state_lock);
     for (int i = 0; i < native_registry_count; i++) {
         if (strcmp(native_registry[i].class_name, class_name) == 0 &&
             strcmp(native_registry[i].method_name, method_name) == 0 &&
             strcmp(native_registry[i].signature, signature) == 0) {
-            return &native_registry[i];
+            const NativeRegistryEntry* entry = &native_registry[i];
+            pthread_mutex_unlock(&g_fake_jni_state_lock);
+            return entry;
         }
     }
+    pthread_mutex_unlock(&g_fake_jni_state_lock);
     return NULL;
 }
 
@@ -217,17 +237,28 @@ static char* sp_utf16_to_utf8(const jchar* utf16, jsize len) {
 
 /* Register a UTF-8 string and return a unique jstring handle */
 static jstring pool_intern_utf8(const char* utf8) {
-    if (string_count >= MAX_STRINGS) return (jstring)0x7FFFF;
+    pthread_mutex_lock(&g_fake_jni_state_lock);
+    if (string_count >= MAX_STRINGS) {
+        pthread_mutex_unlock(&g_fake_jni_state_lock);
+        return (jstring)0x7FFFF;
+    }
     const char* src = utf8 ? utf8 : "";
 
     /* Deduplicate: return existing handle for identical content */
     for (int i = 0; i < string_count; i++) {
         if (strcmp(string_table[i].utf8, src) == 0)
-            return string_table[i].handle;
+        {
+            jstring handle = string_table[i].handle;
+            pthread_mutex_unlock(&g_fake_jni_state_lock);
+            return handle;
+        }
     }
 
     char* u8 = strdup(src);
-    if (!u8) return (jstring)0x7FFFE;
+    if (!u8) {
+        pthread_mutex_unlock(&g_fake_jni_state_lock);
+        return (jstring)0x7FFFE;
+    }
 
     jsize u16_len;
     jchar* u16 = sp_utf8_to_utf16(u8, &u16_len);
@@ -241,6 +272,7 @@ static jstring pool_intern_utf8(const char* utf8) {
     e->utf16          = u16;
     e->utf8_len       = (jsize)strlen(u8);
     e->utf16_len      = u16_len;
+    pthread_mutex_unlock(&g_fake_jni_state_lock);
     return handle;
 }
 
@@ -250,10 +282,17 @@ jstring fake_jni_new_string_utf(const char* utf8) {
 
 /* Register a UTF-16 string and return a unique jstring handle */
 static jstring pool_intern_utf16(const jchar* chars, jsize len) {
-    if (string_count >= MAX_STRINGS) return (jstring)0x7FFFF;
+    pthread_mutex_lock(&g_fake_jni_state_lock);
+    if (string_count >= MAX_STRINGS) {
+        pthread_mutex_unlock(&g_fake_jni_state_lock);
+        return (jstring)0x7FFFF;
+    }
 
     jchar* u16 = (jchar*)malloc(((size_t)len + 1) * sizeof(jchar));
-    if (!u16) return (jstring)0x7FFFE;
+    if (!u16) {
+        pthread_mutex_unlock(&g_fake_jni_state_lock);
+        return (jstring)0x7FFFE;
+    }
     if (chars && len > 0) memcpy(u16, chars, (size_t)len * sizeof(jchar));
     u16[len] = 0;
 
@@ -268,15 +307,22 @@ static jstring pool_intern_utf16(const jchar* chars, jsize len) {
     e->utf16          = u16;
     e->utf8_len       = u8 ? (jsize)strlen(u8) : 0;
     e->utf16_len      = len;
+    pthread_mutex_unlock(&g_fake_jni_state_lock);
     return handle;
 }
 
 /* Look up entry by handle; returns NULL if not found */
 static StringEntry* pool_find(jstring handle) {
+    pthread_mutex_lock(&g_fake_jni_state_lock);
     for (int i = 0; i < string_count; i++) {
         if (string_table[i].handle == handle)
-            return &string_table[i];
+        {
+            StringEntry* entry = &string_table[i];
+            pthread_mutex_unlock(&g_fake_jni_state_lock);
+            return entry;
+        }
     }
+    pthread_mutex_unlock(&g_fake_jni_state_lock);
     return NULL;
 }
 
@@ -287,12 +333,14 @@ const char* fake_jni_string_utf8(jstring string) {
 
 /* Release all pool memory */
 static void pool_destroy(void) {
+    pthread_mutex_lock(&g_fake_jni_state_lock);
     for (int i = 0; i < string_count; i++) {
         free(string_table[i].utf8);
         free(string_table[i].utf16);
     }
     string_count   = 0;
     next_string_id = 0x70000;
+    pthread_mutex_unlock(&g_fake_jni_state_lock);
 }
 
 /* ============================================
@@ -328,16 +376,22 @@ static jmethodID method_table_register(const char* class_name,
     const char* mn  = method_name ? method_name : "unknown";
     const char* sg  = sig         ? sig         : "";
 
+    pthread_mutex_lock(&g_fake_jni_state_lock);
     for (int i = 0; i < method_count; i++) {
         if (method_table[i].is_static == is_static &&
             strcmp(method_table[i].class_name,  cn) == 0 &&
             strcmp(method_table[i].method_name, mn) == 0 &&
             strcmp(method_table[i].signature,   sg) == 0) {
-            return method_table[i].id;
+            jmethodID id = method_table[i].id;
+            pthread_mutex_unlock(&g_fake_jni_state_lock);
+            return id;
         }
     }
 
-    if (method_count >= MAX_METHODS) return (jmethodID)0xFFFF;
+    if (method_count >= MAX_METHODS) {
+        pthread_mutex_unlock(&g_fake_jni_state_lock);
+        return (jmethodID)0xFFFF;
+    }
 
     jmethodID new_id = (jmethodID)(next_method_id);
     next_method_id += 0x10;
@@ -348,14 +402,21 @@ static jmethodID method_table_register(const char* class_name,
     strncpy(e->class_name,  cn, sizeof(e->class_name)  - 1);
     strncpy(e->method_name, mn, sizeof(e->method_name) - 1);
     strncpy(e->signature,   sg, sizeof(e->signature)   - 1);
+    pthread_mutex_unlock(&g_fake_jni_state_lock);
     return new_id;
 }
 
 /* Look up a registered method by its ID. Returns NULL if not found. */
 static MethodEntry* method_table_find(jmethodID id) {
+    pthread_mutex_lock(&g_fake_jni_state_lock);
     for (int i = 0; i < method_count; i++) {
-        if (method_table[i].id == id) return &method_table[i];
+        if (method_table[i].id == id) {
+            MethodEntry* entry = &method_table[i];
+            pthread_mutex_unlock(&g_fake_jni_state_lock);
+            return entry;
+        }
     }
+    pthread_mutex_unlock(&g_fake_jni_state_lock);
     return NULL;
 }
 
@@ -2034,7 +2095,12 @@ static struct JNINativeInterface g_fake_jni_funcs = {
  * PUBLIC API
  * ============================================ */
 
-static struct _JNIEnv g_fake_jnienv;
+/*
+ * Real JNI requires JNIEnv* to be thread-affine. Returning one global
+ * JNIEnv across worker/callback threads can confuse native code that
+ * expects a distinct per-thread interface pointer.
+ */
+static __thread struct _JNIEnv g_fake_jnienv;
 
 JNIEnv* create_fake_jnienv(void) {
     g_fake_jnienv.functions = &g_fake_jni_funcs;

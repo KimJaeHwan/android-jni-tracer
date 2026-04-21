@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 #include <stdarg.h>
+#include <pthread.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -32,6 +33,7 @@ static int clock_gettime(int clk_id, struct timespec *spec) {
 
 static FILE* g_log_file = NULL;
 static int g_call_count = 0;
+static pthread_mutex_t g_logger_state_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Function call statistics */
 typedef struct {
@@ -57,16 +59,18 @@ void init_logger(const char* log_path) {
 
 void log_info(const char* format, ...) {
     if (!g_log_file) return;
-    
+
+    flockfile(g_log_file);
     va_list args;
     va_start(args, format);
-    
+
     fprintf(g_log_file, "[INFO] ");
     vfprintf(g_log_file, format, args);
     fprintf(g_log_file, "\n");
     fflush(g_log_file);
-    
+
     va_end(args);
+    funlockfile(g_log_file);
 }
 
 void log_error(const char* format, ...) {
@@ -76,11 +80,13 @@ void log_error(const char* format, ...) {
 
     /* Write to log file */
     va_start(args, format);
+    flockfile(g_log_file);
     fprintf(g_log_file, "[ERROR] ");
     vfprintf(g_log_file, format, args);
     fprintf(g_log_file, "\n");
     fflush(g_log_file);
     va_end(args);
+    funlockfile(g_log_file);
 
     /* Also output to stderr (skip if log file IS stderr to avoid duplicate) */
     if (g_log_file != stderr) {
@@ -94,49 +100,58 @@ void log_error(const char* format, ...) {
 
 void log_warning(const char* format, ...) {
     if (!g_log_file) return;
-    
+
+    flockfile(g_log_file);
     va_list args;
     va_start(args, format);
-    
+
     fprintf(g_log_file, "[WARN] ");
     vfprintf(g_log_file, format, args);
     fprintf(g_log_file, "\n");
     fflush(g_log_file);
-    
+
     va_end(args);
+    funlockfile(g_log_file);
 }
 
 void log_jni_call(const char* func_name, const char* format, ...) {
     if (!g_log_file) return;
-    
+
+    flockfile(g_log_file);
+    pthread_mutex_lock(&g_logger_state_lock);
     g_call_count++;
-    
+    int call_index = g_call_count;
+    pthread_mutex_unlock(&g_logger_state_lock);
+
     /* Timestamp */
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    
+
     fprintf(g_log_file, "[JNI #%04d] [%ld.%06ld] %s(", 
-            g_call_count,
+            call_index,
             ts.tv_sec,
             ts.tv_nsec / 1000,
             func_name);
-    
+
     if (format && strlen(format) > 0) {
         va_list args;
         va_start(args, format);
         vfprintf(g_log_file, format, args);
         va_end(args);
     }
-    
+
     fprintf(g_log_file, ")\n");
     fflush(g_log_file);
+    funlockfile(g_log_file);
 }
 
 void increment_call_count(const char* func_name) {
+    pthread_mutex_lock(&g_logger_state_lock);
     /* Update statistics */
     for (int i = 0; i < g_stat_count; i++) {
         if (strcmp(g_call_stats[i].func_name, func_name) == 0) {
             g_call_stats[i].count++;
+            pthread_mutex_unlock(&g_logger_state_lock);
             return;
         }
     }
@@ -148,11 +163,13 @@ void increment_call_count(const char* func_name) {
         g_call_stats[g_stat_count].count = 1;
         g_stat_count++;
     }
+    pthread_mutex_unlock(&g_logger_state_lock);
 }
 
 void print_log_summary(void) {
     if (!g_log_file) return;
-    
+
+    pthread_mutex_lock(&g_logger_state_lock);
     fprintf(g_log_file, "\n=== Call Statistics ===\n");
     fprintf(g_log_file, "Total JNI calls: %d\n", g_call_count);
     fprintf(g_log_file, "Unique functions called: %d\n\n", g_stat_count);
@@ -163,12 +180,16 @@ void print_log_summary(void) {
                 g_call_stats[i].func_name,
                 g_call_stats[i].count);
     }
-    
+
     fflush(g_log_file);
+    pthread_mutex_unlock(&g_logger_state_lock);
 }
 
 int get_total_call_count(void) {
-    return g_call_count;
+    pthread_mutex_lock(&g_logger_state_lock);
+    int total = g_call_count;
+    pthread_mutex_unlock(&g_logger_state_lock);
+    return total;
 }
 
 void close_logger(void) {

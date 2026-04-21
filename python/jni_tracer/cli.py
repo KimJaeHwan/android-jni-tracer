@@ -12,7 +12,7 @@ from .mock import template as mock_template
 from .mock import validate_mock
 from .mcp.execution import ExecutionConfig
 from .runner import adb_run
-from .store import list_runs, run_log_path, run_manifest, run_summary
+from .store import list_runs, read_json, run_log_path, run_manifest, run_summary
 
 
 def print_json(data: Any) -> None:
@@ -65,8 +65,21 @@ def cmd_run(args: argparse.Namespace) -> int:
         invoke_plan=args.invoke_plan,
         timeout_sec=args.timeout_sec,
     )
-    print_json({"status": "ok", "run_dir": str(run_dir), "manifest": str(run_dir / "manifest.json")})
-    return 0
+    manifest_path = run_dir / "manifest.json"
+    manifest = read_json(manifest_path)
+    print_json(
+        {
+            "status": manifest.get("status", "unknown"),
+            "run_dir": str(run_dir),
+            "manifest": str(manifest_path),
+            "returncode": manifest.get("returncode"),
+            "termination_kind": manifest.get("termination_kind"),
+            "summary_source": manifest.get("summary_source"),
+            "log_parse_error": manifest.get("log_parse_error"),
+            "partial_log_available": manifest.get("partial_log_available"),
+        }
+    )
+    return 0 if manifest.get("status") == "ok" else 1
 
 
 def cmd_runs(args: argparse.Namespace) -> int:

@@ -119,6 +119,10 @@ Returns: manifest object containing:
   - invoke_plan (str|null): Path to invoke plan file if used
   - timeout_sec (int): Timeout that was applied
   - device_dir (str): Android device directory used
+  - termination_kind (str|null): "timeout", "nonzero_exit", or "signal_<n>" when abnormal termination was detected
+  - summary_source (str|null): "jni_hook.json" for normal parsing or "jni_hook.ndjson" when recovery was required
+  - partial_log_available (bool): True if structured log artifacts were recovered even though execution failed
+  - log_parse_error (str|null): JSON parse failure from jni_hook.json when truncation/corruption occurred
 
 Use this to check whether a run included an invoke plan before calling diff_runs
 or to verify execution parameters of a past run.
@@ -527,6 +531,15 @@ Returns:
     "next_tools": ["get_run", "get_summary", "get_calls", "diff_runs"]
   }
 
+Important failure-handling note:
+  A run may return status="failed" and still contain useful evidence.
+  If manifest.partial_log_available is true, inspect:
+    - manifest.termination_kind
+    - manifest.summary_source
+    - manifest.log_parse_error
+  In that case the harness or target exited abnormally, but partial structured
+  logs were still recovered and summarized.
+
 After this call:
   get_natives(run_id)  → see what methods the library registered
   get_calls(run_id)    → see full JNI call sequence during startup
@@ -598,8 +611,9 @@ Parameters:
 
 Returns:
   {
-    "status": "ok",
+    "status": "ok" | "failed",
     "run_id": "20240101_120000_probe_dispatch",
+    "returncode": 0,
     "summary": {
       "invoke_results": [
         {
@@ -613,6 +627,15 @@ Returns:
     },
     "next_tools": ["get_run", "get_summary", "get_calls", "diff_runs"]
   }
+
+Crash/kill interpretation:
+  If a step triggers a crash-like path, the run may return:
+    - status="failed"
+    - returncode != 0
+    - manifest.termination_kind = "signal_<n>"
+  This is not automatically a useless tool failure.
+  If manifest.partial_log_available is true, treat the result as a partial
+  execution trace and inspect the last observed InvokeNative / Call*Method events.
 
 To read actual return values from invoke steps:
   get_calls(run_id, function="InvokeNative")

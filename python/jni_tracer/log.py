@@ -17,6 +17,25 @@ def load_log(path: str | Path) -> dict[str, Any]:
     return data
 
 
+def load_ndjson_log(path: str | Path) -> dict[str, Any]:
+    calls: list[dict[str, Any]] = []
+    with Path(path).open("r", encoding="utf-8") as f:
+        for lineno, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            entry = json.loads(line)
+            if not isinstance(entry, dict):
+                raise ValueError(f"ndjson line {lineno} is not an object")
+            calls.append(entry)
+    return {
+        "log_version": "1.0-ndjson",
+        "calls": calls,
+        "total_calls": len(calls),
+        "recovered_from": str(path),
+    }
+
+
 def validate_log(path: str | Path) -> list[str]:
     data = load_log(path)
     errors: list[str] = []

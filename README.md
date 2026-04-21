@@ -138,6 +138,7 @@ runs/<run_id>/
   logs/
     jni_hook.log
     jni_hook.json
+    jni_hook.ndjson
 ```
 
 저장된 run은 파일 경로 대신 run id로 다시 조회할 수 있다.
@@ -149,6 +150,13 @@ PYTHONPATH=python python3 -m jni_tracer runs natives <run_id>
 PYTHONPATH=python python3 -m jni_tracer runs calls <run_id> --function InvokeNative
 PYTHONPATH=python python3 -m jni_tracer runs diff <base_run_id> <experiment_run_id>
 ```
+
+비정상 종료/부분 로그 복구 정책은 [docs/failure_recovery.md](./docs/failure_recovery.md)를 참고한다.
+
+- `manifest.json`의 `termination_kind`, `summary_source`, `partial_log_available`,
+  `log_parse_error`를 함께 확인해야 한다.
+- `status="failed"`여도 부분 로그와 복구 summary가 남아 있으면
+  타깃 동작 분석에 계속 사용할 수 있다.
 
 LLM/MCP 클라이언트 연동을 위한 FastMCP 기반 read-only MCP 서버도 제공한다.
 이 서버는 기존 run store만 조회하며 adb 실행 기능은 노출하지 않는다.
@@ -222,6 +230,7 @@ Execution MCP tools:
 - **[docs/mock_config.md](./docs/mock_config.md)** - Mock 설정 파일 사용법 (리턴값 주입)
 - **[docs/invoke_usage.md](./docs/invoke_usage.md)** - RegisterNatives entry 직접 호출 및 sequence 실행
 - **[docs/mcp_setup_guide.md](./docs/mcp_setup_guide.md)** - Codex/VS Code 계열 MCP client 연결 방법
+- **[docs/failure_recovery.md](./docs/failure_recovery.md)** - 비정상 종료, partial log, NDJSON 복구 처리 방식
 - **[docs/final_feature_checklist.md](./docs/final_feature_checklist.md)** - 전체 기능 점검표와 MCP 연동 가이드
 - **[python/README.md](./python/README.md)** - Python CLI와 run store 사용법
 
@@ -235,6 +244,11 @@ Execution MCP tools:
 - **이중 로깅 시스템**:
   - 텍스트 로그: 실시간 모니터링용 가독성 높은 포맷
   - JSON 로그: 분석 도구 연동을 위한 구조화된 데이터 (caller offset 포함)
+- **Kill-safe 부분 복구 로그**: `jni_hook.ndjson`으로 각 이벤트를 줄 단위로 남겨
+  SIGKILL/비정상 종료 후에도 summary 복구 가능
+- **실패 복구 메타데이터**: `manifest.json`에 `termination_kind`, `summary_source`,
+  `partial_log_available`, `log_parse_error`를 기록하여
+  "도구 실패"와 "타깃 크래시"를 구분 가능
 - **통계 분석**: 함수별 호출 빈도 및 패턴 분석
 - **VM 불필요**: 실제 Android VM 없이 독립 실행
 

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
-from .log import load_log, summary
+from .log import load_log, load_ndjson_log, summary
 from .store import ensure_run_dir, make_run_id, write_json
 
 
@@ -103,18 +104,47 @@ def adb_run(
     run_cmd(["adb", "pull", f"{device_logs}/.", str(pull_dir)], check=False)
 
     log_json = pull_dir / "jni_hook.json"
+    log_ndjson = pull_dir / "jni_hook.ndjson"
     log_summary: dict[str, Any] = {}
+    log_parse_error: str | None = None
+    summary_source: str | None = None
     if log_json.exists():
-        log_summary = summary(load_log(log_json))
-        write_json(run_dir / "summary.json", log_summary)
+        try:
+            log_summary = summary(load_log(log_json))
+            write_json(run_dir / "summary.json", log_summary)
+            summary_source = "jni_hook.json"
+        except (json.JSONDecodeError, ValueError) as exc:
+            log_parse_error = f"{type(exc).__name__}: {exc}"
+            if log_ndjson.exists():
+                try:
+                    recovered = load_ndjson_log(log_ndjson)
+                    log_summary = summary(recovered)
+                    log_summary["recovered_from"] = "jni_hook.ndjson"
+                    log_summary["recovery_reason"] = log_parse_error
+                    write_json(run_dir / "summary.json", log_summary)
+                    summary_source = "jni_hook.ndjson"
+                except (json.JSONDecodeError, ValueError) as ndjson_exc:
+                    log_parse_error = (
+                        f"{log_parse_error}; NDJSON fallback failed: "
+                        f"{type(ndjson_exc).__name__}: {ndjson_exc}"
+                    )
 
     archived_mock = run_dir / "mock.json" if mock else None
     archived_invoke_plan = run_dir / "invoke_plan.json" if invoke_plan else None
+    status = "ok" if proc.returncode == 0 and log_parse_error is None else "failed"
+    termination_kind = None
+    if proc.returncode == 124:
+        termination_kind = "timeout"
+    elif proc.returncode >= 128:
+        termination_kind = f"signal_{proc.returncode - 128}"
+    elif proc.returncode != 0:
+        termination_kind = "nonzero_exit"
     manifest = {
         "run_id": run_id,
         "label": label,
-        "status": "ok" if proc.returncode == 0 else "failed",
+        "status": status,
         "returncode": proc.returncode,
+        "termination_kind": termination_kind,
         "started_at": int(started),
         "duration_sec": round(time.time() - started, 3),
         "mode": "android-adb",
@@ -135,7 +165,13 @@ def adb_run(
         "stdout": proc.stdout,
         "stderr": proc.stderr,
         "log_json_path": str(log_json) if log_json.exists() else None,
+        "log_ndjson_path": str(log_ndjson) if log_ndjson.exists() else None,
         "summary_path": str(run_dir / "summary.json") if log_summary else None,
+        "summary_source": summary_source,
+        "log_parse_error": log_parse_error,
+        "log_json_size": log_json.stat().st_size if log_json.exists() else None,
+        "log_ndjson_size": log_ndjson.stat().st_size if log_ndjson.exists() else None,
+        "partial_log_available": log_json.exists() or log_ndjson.exists(),
     }
     write_json(run_dir / "manifest.json", manifest)
     if invoke_plan and archived_invoke_plan:
